@@ -75,7 +75,7 @@ begin
     end;
     w := TRepoWorker.Create(FCfg.Repos[i].LocalName, path, FCfg.GithubUser,
       FToken, FCfg.MachineName, FCfg.CommitDebounceMs, FCfg.GcEveryNCommits,
-      FStatus, FCfg.IgnoreGlobs);
+      FCfg.PullIntervalSec, FStatus, FCfg.IgnoreGlobs);
     SetLength(FWorkers, Length(FWorkers) + 1);
     FWorkers[High(FWorkers)] := w;
     w.Start;

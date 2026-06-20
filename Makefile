@@ -59,10 +59,12 @@ tests: | $(TESTOUT)
 	$(FPC) -Fusrc/core -FU$(TESTOUT) -otests/testauth tests/testauth.lpr
 	$(FPC) -Fusrc/core -FU$(TESTOUT) -otests/testlink tests/testlink.lpr
 	$(FPC) -Fusrc/core -FU$(TESTOUT) -otests/testworker tests/testworker.lpr
+	$(FPC) -Fusrc/core -FU$(TESTOUT) -otests/testsync tests/testsync.lpr
 	tests/testgit
 	tests/testauth
 	tests/testlink
 	tests/testworker
+	tests/testsync
 
 $(TESTOUT):
 	mkdir -p $(TESTOUT)
@@ -95,7 +97,7 @@ clean:
 	find . -name '*.o' -o -name '*.ppu' -o -name '*.or' | xargs -r rm -f
 
 distclean: clean
-	rm -f $(BIN) $(BIN).exe tests/testgit tests/testauth tests/testlink tests/testworker $(RES)
+	rm -f $(BIN) $(BIN).exe tests/testgit tests/testauth tests/testlink tests/testworker tests/testsync $(RES)
 
 help:
 	@sed -n '1,30p' Makefile

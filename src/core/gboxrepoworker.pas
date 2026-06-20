@@ -1,12 +1,10 @@
 unit gboxrepoworker;
 
-{ One background thread per repo. Watches the working tree (via TFileWatcher),
-  debounces bursts of saves, then auto-commits and pushes. Runs periodic `git
-  gc` for maintenance.
-
-  Milestone 5 scope: local change -> commit -> push. If the push is rejected
-  because the remote moved on, it is reported as an error for now; fetch/merge
-  and keep-both conflict handling arrive in milestone 6. }
+{ One background thread per repo. Watches the working tree (via TFileWatcher)
+  and debounces bursts of saves, then runs a bidirectional sync cycle
+  (commit -> fetch -> merge/keep-both -> push) via gboxsync. Also triggers a
+  periodic pull so remote changes arrive without a local edit, and runs `git gc`
+  for maintenance. }
 
 {$mode objfpc}{$H+}
 
@@ -14,7 +12,7 @@ interface
 
 uses
   Classes, SysUtils, DateUtils, SyncObjs,
-  gboxgitrunner, gboxfilewatcher, gboxstatusmodel;
+  gboxgitrunner, gboxfilewatcher, gboxstatusmodel, gboxsync;
 
 type
   TRepoWorker = class(TThread)
@@ -26,6 +24,7 @@ type
     FMachine: string;
     FDebounceMs: Integer;
     FGcEvery: Integer;
+    FPullIntervalMs: Integer;
     FStatus: TStatusModel;
     FIgnore: TStringList;
     FWatcher: TFileWatcher;
@@ -33,6 +32,7 @@ type
     FDirty: Boolean;
     FForce: Boolean;
     FLastChange: TDateTime;
+    FLastCycle: TDateTime;
     FCommitsSinceGc: Integer;
     procedure OnWatchChange(Sender: TObject);
     procedure DoSyncCycle;
@@ -40,7 +40,8 @@ type
     procedure Execute; override;
   public
     constructor Create(const AName, ALocalPath, AUser, AToken, AMachine: string;
-      ADebounceMs, AGcEvery: Integer; AStatus: TStatusModel; AIgnore: TStrings);
+      ADebounceMs, AGcEvery, APullIntervalSec: Integer; AStatus: TStatusModel;
+      AIgnore: TStrings);
     destructor Destroy; override;
     { Request an immediate sync (e.g. the user chose "Sync now"). }
     procedure RequestSync;
@@ -55,7 +56,8 @@ uses
   gboxlog;
 
 constructor TRepoWorker.Create(const AName, ALocalPath, AUser, AToken, AMachine: string;
-  ADebounceMs, AGcEvery: Integer; AStatus: TStatusModel; AIgnore: TStrings);
+  ADebounceMs, AGcEvery, APullIntervalSec: Integer; AStatus: TStatusModel;
+  AIgnore: TStrings);
 begin
   inherited Create(True);            // suspended; caller calls Start
   FreeOnTerminate := False;
@@ -66,6 +68,7 @@ begin
   FMachine := AMachine;
   FDebounceMs := ADebounceMs;
   FGcEvery := AGcEvery;
+  FPullIntervalMs := APullIntervalSec * 1000;
   FStatus := AStatus;
   FLock := TCriticalSection.Create;
   FIgnore := TStringList.Create;
@@ -112,53 +115,61 @@ end;
 procedure TRepoWorker.DoSyncCycle;
 var
   git: TGitRunner;
-  r: TGitResult;
-  committed: Boolean;
+  outcome: TSyncOutcome;
+  detail: string;
+  conflicts: TStringList;
 begin
   if Assigned(FStatus) then FStatus.SetState(FName, rsSyncing, '');
+  conflicts := TStringList.Create;
   git := TGitRunner.Create(FLocalPath);
   try
     git.AuthUser := FUser;
     git.AuthToken := FToken;
-    committed := False;
 
-    if git.HasUncommittedChanges then
-    begin
-      git.AddAll;
-      r := git.CommitAll(Format('%s %s', [FMachine,
-        FormatDateTime('yyyy-mm-dd hh:nn:ss', Now)]));
-      committed := r.Ok;
-      if committed then Inc(FCommitsSinceGc);
-    end;
+    outcome := RunSyncCycle(git, FMachine, detail, conflicts);
 
-    r := git.Push(False);
-    if r.Ok then
-    begin
-      if Assigned(FStatus) then
+    case outcome of
+      soError:
       begin
-        FStatus.SetState(FName, rsSynced, '');
-        FStatus.TouchSync(FName);
+        if Assigned(FStatus) then FStatus.SetState(FName, rsError, detail);
+        if Assigned(Log) then Log.Warn('worker', FName + ': ' + detail);
       end;
-    end
-    else
-    begin
-      // remote likely moved on -- real reconciliation comes in milestone 6
-      if Assigned(FStatus) then
-        FStatus.SetState(FName, rsError, 'push failed: ' + Trim(r.StdErr));
-      if Assigned(Log) then
-        Log.Warn('worker', FName + ' push failed: ' + Trim(r.StdErr));
+      soConflict:
+      begin
+        if Assigned(FStatus) then
+        begin
+          FStatus.SetConflicts(FName, True);
+          FStatus.SetState(FName, rsConflict,
+            Format('%d conflict(s) -- kept both', [conflicts.Count]));
+          FStatus.TouchSync(FName);
+        end;
+        if Assigned(Log) then
+          Log.Warn('worker', Format('%s: kept both for %d file(s)',
+            [FName, conflicts.Count]));
+      end;
+      else
+      begin
+        if Assigned(FStatus) then
+        begin
+          FStatus.SetState(FName, rsSynced, SyncOutcomeText(outcome));
+          FStatus.TouchSync(FName);
+        end;
+        if (outcome in [soPushed, soPulled, soMerged]) and Assigned(Log) then
+          Log.Info('worker', FName + ': ' + SyncOutcomeText(outcome));
+      end;
     end;
 
+    // maintenance: gc periodically after cycles that produced commits
+    if outcome in [soPushed, soMerged, soConflict] then
+      Inc(FCommitsSinceGc);
     if (FGcEvery > 0) and (FCommitsSinceGc >= FGcEvery) then
     begin
       git.Gc;
       FCommitsSinceGc := 0;
     end;
-
-    if committed and Assigned(Log) then
-      Log.Info('worker', FName + ' committed + pushed');
   finally
     git.Free;
+    conflicts.Free;
   end;
 end;
 
@@ -168,7 +179,8 @@ var
 begin
   FWatcher.Start;
   try
-    // commit/push anything already pending when we start
+    FLastCycle := Now;
+    // commit/push anything already pending, and pull remote state, on startup
     RequestSync;
     while not Terminated do
     begin
@@ -185,7 +197,10 @@ begin
         begin
           FDirty := False;
           due := True;
-        end;
+        end
+        else if (FPullIntervalMs > 0) and
+          (MilliSecondsBetween(Now, FLastCycle) >= FPullIntervalMs) then
+          due := True;   // periodic sync-down
       finally
         FLock.Leave;
       end;
@@ -198,6 +213,7 @@ begin
           on E: Exception do
             if Assigned(Log) then Log.Error('worker', FName + ': ' + E.Message);
         end;
+        FLastCycle := Now;
       end;
 
       Sleep(150);

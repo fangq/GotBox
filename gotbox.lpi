@@ -113,6 +113,16 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="gboxengine"/>
       </Unit>
+      <Unit>
+        <Filename Value="src/core/gboxconflict.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxconflict"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/core/gboxsync.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxsync"/>
+      </Unit>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

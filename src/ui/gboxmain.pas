@@ -25,6 +25,7 @@ type
     FStore: TConfigStore;
     FStatus: TStatusModel;
     FEngine: TSyncEngine;
+    FLastAgg: TRepoState;
     procedure BuildTrayMenu;
     procedure UpdateTrayState;
     procedure StatusModelChanged;
@@ -120,15 +121,35 @@ begin
 end;
 
 procedure TMainForm.UpdateTrayState;
+var
+  agg: TRepoState;
 begin
-  // M1: a single icon; later this swaps per AggregateState colour.
-  case FStatus.AggregateState of
+  agg := FStatus.AggregateState;
+  case agg of
     rsError: TrayIcon.Hint := 'GotBox - error';
     rsConflict: TrayIcon.Hint := 'GotBox - conflict';
     rsSyncing: TrayIcon.Hint := 'GotBox - syncing';
     else
       TrayIcon.Hint := 'GotBox - synced';
   end;
+
+  // notify the user when we first enter a conflict/error state
+  if (agg <> FLastAgg) and (agg in [rsConflict, rsError]) then
+  begin
+    if agg = rsConflict then
+    begin
+      TrayIcon.BalloonTitle := 'GotBox - conflict';
+      TrayIcon.BalloonHint :=
+        'A file changed on two machines. Both versions were kept; open Status to resolve.';
+    end
+    else
+    begin
+      TrayIcon.BalloonTitle := 'GotBox - sync error';
+      TrayIcon.BalloonHint := 'A repo could not sync. Open Status for details.';
+    end;
+    TrayIcon.ShowBalloonHint;
+  end;
+  FLastAgg := agg;
 end;
 
 procedure TMainForm.StatusModelChanged;
