@@ -31,6 +31,7 @@ type
     procedure StatusModelChanged;
     procedure StartEngine;
     procedure StopEngine;
+    function PrepareRemote(out AToken, AErr: string): Boolean;
     // menu handlers
     procedure mnuOpenRoot(Sender: TObject);
     procedure mnuScanLink(Sender: TObject);
@@ -158,25 +159,61 @@ begin
   TThread.Queue(nil, @UpdateTrayState);
 end;
 
-procedure TMainForm.StartEngine;
+{ Validates that the configured remote backend is usable and returns the auth
+  token (empty for the ssh/self-hosted backend, which uses ssh keys). }
+function TMainForm.PrepareRemote(out AToken, AErr: string): Boolean;
 var
   cred: TCredStore;
-  token: string;
 begin
-  StopEngine;
-  if (FConfig.RootDir = '') or (FConfig.GithubUser = '') or
-    (Length(FConfig.Repos) = 0) then
+  AToken := '';
+  AErr := '';
+  Result := False;
+  if (FConfig.RootDir = '') or not DirectoryExists(FConfig.RootDir) then
+  begin
+    AErr := 'Set a valid root folder in Settings first.';
     Exit;
+  end;
 
+  if SameText(FConfig.RemoteKind, 'git') then
+  begin
+    if FConfig.SshBase = '' then
+    begin
+      AErr := 'Set the self-hosted git base URL in Settings first.';
+      Exit;
+    end;
+    Result := True;   // ssh key auth; no token needed
+    Exit;
+  end;
+
+  // github backend
+  if FConfig.GithubUser = '' then
+  begin
+    AErr := 'Sign in with the Account window first.';
+    Exit;
+  end;
   cred := TCredStore.Create;
   try
-    if not cred.LoadToken(FConfig.GithubUser, token) then
+    if not cred.LoadToken(FConfig.GithubUser, AToken) then
     begin
-      if Assigned(Log) then Log.Warn('engine', 'no stored token; sync not started');
+      AErr := 'No stored token found. Use Account to sign in again.';
       Exit;
     end;
   finally
     cred.Free;
+  end;
+  Result := True;
+end;
+
+procedure TMainForm.StartEngine;
+var
+  token, err: string;
+begin
+  StopEngine;
+  if Length(FConfig.Repos) = 0 then Exit;
+  if not PrepareRemote(token, err) then
+  begin
+    if Assigned(Log) then Log.Warn('engine', 'sync not started: ' + err);
+    Exit;
   end;
 
   FEngine := TSyncEngine.Create(FConfig, token, FStatus);
@@ -204,36 +241,18 @@ end;
 
 procedure TMainForm.mnuScanLink(Sender: TObject);
 var
-  cred: TCredStore;
-  token, msg: string;
+  token, err, msg: string;
   linker: TRepoLinker;
   res: TLinkResultArray;
   i, nOk, nErr: Integer;
 begin
-  if (FConfig.RootDir = '') or not DirectoryExists(FConfig.RootDir) then
+  if not PrepareRemote(token, err) then
   begin
-    ShowMessage('Set a valid root folder in Settings first.');
-    Exit;
-  end;
-  if FConfig.GithubUser = '' then
-  begin
-    ShowMessage('Sign in with the Account window first.');
+    ShowMessage(err);
     Exit;
   end;
 
-  cred := TCredStore.Create;
-  try
-    if not cred.LoadToken(FConfig.GithubUser, token) then
-    begin
-      ShowMessage('No stored token found. Use Account to sign in again.');
-      Exit;
-    end;
-  finally
-    cred.Free;
-  end;
-
-  // Blocking scan (talks to GitHub). Acceptable for a manual action; the
-  // continuous sync engine (milestone 5) will move this onto worker threads.
+  // Blocking scan (talks to the remote). Acceptable for a manual action.
   Screen.Cursor := crHourGlass;
   try
     linker := TRepoLinker.Create(FConfig, token, FStatus);

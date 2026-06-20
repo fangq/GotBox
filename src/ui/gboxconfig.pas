@@ -16,6 +16,10 @@ type
     lblRoot: TLabel;
     eRoot: TEdit;
     btnBrowse: TButton;
+    lblKind: TLabel;
+    cboKind: TComboBox;
+    lblSsh: TLabel;
+    eSshBase: TEdit;
     lblMachine: TLabel;
     eMachine: TEdit;
     lblCap: TLabel;
@@ -68,6 +72,10 @@ end;
 function TConfigForm.Edit(ACfg: TGotConfig): Boolean;
 begin
   eRoot.Text := ACfg.RootDir;
+  if SameText(ACfg.RemoteKind, 'git') then cboKind.ItemIndex := 1
+  else
+    cboKind.ItemIndex := 0;
+  eSshBase.Text := ACfg.SshBase;
   eMachine.Text := ACfg.MachineName;
   seCap.Value := ACfg.HistoryCap;
   seDebounce.Value := ACfg.CommitDebounceMs;
@@ -79,6 +87,10 @@ begin
   if not Result then Exit;
 
   ACfg.RootDir := eRoot.Text;
+  if cboKind.ItemIndex = 1 then ACfg.RemoteKind := 'git'
+  else
+    ACfg.RemoteKind := 'github';
+  ACfg.SshBase := Trim(eSshBase.Text);
   ACfg.MachineName := Trim(eMachine.Text);
   ACfg.HistoryCap := seCap.Value;
   ACfg.CommitDebounceMs := seDebounce.Value;
