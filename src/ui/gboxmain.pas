@@ -206,17 +206,10 @@ begin
   if (agg <> FLastAgg) and (agg in [rsConflict, rsError]) then
   begin
     if agg = rsConflict then
-    begin
-      TrayIcon.BalloonTitle := 'GotBox - conflict';
-      TrayIcon.BalloonHint :=
-        'A file changed on two machines. Both versions were kept; open Status to resolve.';
-    end
+      Notify('GotBox - conflict',
+        'A file changed on two machines. Both versions were kept; open Status to resolve.')
     else
-    begin
-      TrayIcon.BalloonTitle := 'GotBox - sync error';
-      TrayIcon.BalloonHint := 'A repo could not sync. Open Status for details.';
-    end;
-    TrayIcon.ShowBalloonHint;
+      Notify('GotBox - sync error', 'A repo could not sync. Open Status for details.');
   end;
   FLastAgg := agg;
 end;
@@ -390,9 +383,12 @@ begin
   mnuStatus(Sender);
 end;
 
-{ Non-blocking informational notice as a tray balloon (bubble by the icon). }
+{ Non-blocking informational notice. Prefer the OS notifier (notify-send /
+  osascript); fall back to the tray balloon only where there's no notifier
+  (e.g. Windows) -- LCL's gtk2 tray balloon is broken (top-left + Gtk-CRITICAL). }
 procedure TMainForm.Notify(const ATitle, AMsg: string);
 begin
+  if DesktopNotify(ATitle, AMsg) then Exit;
   TrayIcon.BalloonTitle := ATitle;
   TrayIcon.BalloonHint := AMsg;
   TrayIcon.ShowBalloonHint;
