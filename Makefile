@@ -1,8 +1,8 @@
 # GotBox build system
 #
 # Common targets:
-#   make            - build the GUI app for the host platform (debug)
-#   make release    - optimized build
+#   make            - build the GUI app (optimized + stripped Release, ~3.6 MB)
+#   make debug      - build with debug info/symbols (large, for development)
 #   make tests      - build and run the console test suite
 #   make format     - format all Pascal sources with JCF (tools/jcfsettings.cfg)
 #   make format-check - verify sources are already formatted (CI-friendly)
@@ -37,11 +37,13 @@ all: build
 $(RES): gotbox.rc gotbox.manifest
 	$(FPCRES) -of res -o $(RES) gotbox.rc
 
-build debug: $(RES)
-	$(LAZBUILD) $(PROJECT)
+# default build is the optimized, stripped Release mode (~3.6 MB vs ~30 MB debug)
+build release: $(RES)
+	$(LAZBUILD) --build-mode=Release $(PROJECT)
 
-release: $(RES)
-	$(LAZBUILD) --build-mode=Release $(PROJECT) || $(LAZBUILD) -O3 $(PROJECT)
+# debug build keeps symbols/debug info for development (large, not stripped)
+debug: $(RES)
+	$(LAZBUILD) $(PROJECT)
 
 # ---- cross builds ---------------------------------------------------------
 linux: $(RES)
