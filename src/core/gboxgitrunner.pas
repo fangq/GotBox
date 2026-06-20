@@ -27,7 +27,10 @@ type
   private
     FGitExe: string;
     FWorkDir: string;
+    FAuthUser: string;
+    FAuthToken: string;
     function Run(const AArgs: array of string): TGitResult;
+    function EnsureAskPass: string;
   public
     { AWorkDir is the repo working tree (may be empty for clone/global ops). }
     constructor Create(const AWorkDir: string);
@@ -38,6 +41,13 @@ type
 
     property GitExe: string read FGitExe write FGitExe;
     property WorkDir: string read FWorkDir write FWorkDir;
+
+    { GitHub user + PAT for non-interactive HTTPS auth. When AuthToken is set,
+      git calls are run with a GIT_ASKPASS helper that returns the token from an
+      environment variable -- the secret is never written into a file. The user
+      is taken from the remote URL (https://user@github.com/...). }
+    property AuthUser: string read FAuthUser write FAuthUser;
+    property AuthToken: string read FAuthToken write FAuthToken;
 
     // raw passthrough
     function Git(const AArgs: array of string): TGitResult;
@@ -68,7 +78,39 @@ type
 implementation
 
 uses
+  {$IFDEF UNIX}BaseUnix,{$ENDIF}
   gboxlog;
+
+{ Writes (once) a tiny GIT_ASKPASS helper that echoes the token from the
+  GOTBOX_ASKPASS_PW environment variable, and returns its path. The helper file
+  itself contains no secret. }
+function TGitRunner.EnsureAskPass: string;
+var
+  sl: TStringList;
+begin
+  {$IFDEF WINDOWS}
+  Result := IncludeTrailingPathDelimiter(GetTempDir) + 'gotbox-askpass.cmd';
+  {$ELSE}
+  Result := IncludeTrailingPathDelimiter(GetTempDir) + 'gotbox-askpass.sh';
+  {$ENDIF}
+  if FileExists(Result) then Exit;
+  sl := TStringList.Create;
+  try
+    {$IFDEF WINDOWS}
+    sl.Add('@echo off');
+    sl.Add('echo %GOTBOX_ASKPASS_PW%');
+  {$ELSE}
+    sl.Add('#!/bin/sh');
+    sl.Add('printf ''%s'' "$GOTBOX_ASKPASS_PW"');
+  {$ENDIF}
+    sl.SaveToFile(Result);
+  finally
+    sl.Free;
+  end;
+  {$IFDEF UNIX}
+  FpChmod(Result, &755);
+  {$ENDIF}
+end;
 
 function TGitResult.Ok: Boolean;
 begin
@@ -166,6 +208,12 @@ begin
       proc.Environment.Add(GetEnvironmentString(i));
     proc.Environment.Values['GIT_TERMINAL_PROMPT'] := '0';
     proc.Environment.Values['LC_ALL'] := 'C';
+    if FAuthToken <> '' then
+    begin
+      proc.Environment.Values['GIT_ASKPASS'] := EnsureAskPass;
+      proc.Environment.Values['GOTBOX_ASKPASS_PW'] := FAuthToken;
+      proc.Environment.Values['GIT_SSH_COMMAND'] := 'ssh -oBatchMode=yes';
+    end;
     proc.Options := [poUsePipes, poNoConsole];
 
     if Assigned(Log) then Log.Debug('git', cmdline + ' [' + FWorkDir + ']');
