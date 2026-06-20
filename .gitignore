@@ -23,4 +23,5 @@ gotbox.res
 /tests/testhistory
 /tests/testremote
 /tests/testsuper
+/tests/testengine
 /tests/lib/

@@ -1,7 +1,12 @@
 unit gboxengine;
 
-{ Orchestrator: spawns one TRepoWorker per linked, non-paused repo that exists
-  locally, and offers start/stop/sync-all. The GUI owns a single TSyncEngine. }
+{ Orchestrator for the .gotbox superproject model. Spawns:
+    - one "root" worker for the .gotbox working tree (syncs loose files; submodule
+      directories are excluded from its watch, and ignore=all keeps submodule
+      pointer changes from churning the superproject), and
+    - one worker per submodule listed in .gitmodules (each a normal repo on main),
+      honouring the per-submodule Paused flag from config.
+  The GUI owns a single TSyncEngine. }
 
 {$mode objfpc}{$H+}
 
@@ -9,7 +14,7 @@ interface
 
 uses
   Classes, SysUtils,
-  gboxconfigstore, gboxstatusmodel, gboxrepoworker;
+  gboxconfigstore, gboxstatusmodel, gboxrepoworker, gboxsuper;
 
 type
   TSyncEngine = class
@@ -20,6 +25,7 @@ type
     FWorkers: array of TRepoWorker;
     FRunning: Boolean;
     function LocalPathOf(const AName: string): string;
+    procedure SpawnWorker(const AName, APath: string; AExtraIgnore: TStrings);
   public
     constructor Create(ACfg: TGotConfig; const AToken: string; AStatus: TStatusModel);
     destructor Destroy; override;
@@ -31,10 +37,22 @@ type
     function WorkerCount: Integer;
   end;
 
+{ True if APath is a git working tree (a submodule's .git is a FILE, the
+  superproject's is a directory -- accept either). }
+function IsGitWorkTree(const APath: string): Boolean;
+
 implementation
 
 uses
   gboxlog;
+
+function IsGitWorkTree(const APath: string): Boolean;
+var
+  dot: string;
+begin
+  dot := IncludeTrailingPathDelimiter(APath) + '.git';
+  Result := DirectoryExists(dot) or FileExists(dot);
+end;
 
 constructor TSyncEngine.Create(ACfg: TGotConfig; const AToken: string;
   AStatus: TStatusModel);
@@ -56,36 +74,77 @@ begin
   Result := IncludeTrailingPathDelimiter(FCfg.RootDir) + AName;
 end;
 
+procedure TSyncEngine.SpawnWorker(const AName, APath: string; AExtraIgnore: TStrings);
+var
+  ignore: TStringList;
+  w: TRepoWorker;
+begin
+  ignore := TStringList.Create;
+  try
+    ignore.Assign(FCfg.IgnoreGlobs);
+    if Assigned(AExtraIgnore) then
+      ignore.AddStrings(AExtraIgnore);
+    w := TRepoWorker.Create(AName, APath, FCfg.GithubUser, FToken,
+      FCfg.MachineName, FCfg.CommitDebounceMs, FCfg.GcEveryNCommits,
+      FCfg.PullIntervalSec, FCfg.HistoryCap, FStatus, ignore);
+  finally
+    ignore.Free;
+  end;
+  SetLength(FWorkers, Length(FWorkers) + 1);
+  FWorkers[High(FWorkers)] := w;
+  w.Start;
+end;
+
 procedure TSyncEngine.Start;
 var
+  subs: TSubmoduleArray;
+  subNames: TStringList;
   i: Integer;
-  path: string;
-  w: TRepoWorker;
+  entry: TRepoEntry;
+  paused: Boolean;
 begin
   if FRunning then Exit;
   SetLength(FWorkers, 0);
-  for i := 0 to High(FCfg.Repos) do
+
+  if not IsGitWorkTree(FCfg.RootDir) then
   begin
-    if FCfg.Repos[i].Paused then
-    begin
-      if Assigned(FStatus) then
-        FStatus.SetState(FCfg.Repos[i].LocalName, rsPaused, 'paused');
-      Continue;
-    end;
-    path := LocalPathOf(FCfg.Repos[i].LocalName);
-    if not DirectoryExists(IncludeTrailingPathDelimiter(path) + '.git') then
-    begin
-      if Assigned(FStatus) then
-        FStatus.SetState(FCfg.Repos[i].LocalName, rsError, 'no local clone');
-      Continue;
-    end;
-    w := TRepoWorker.Create(FCfg.Repos[i].LocalName, path, FCfg.GithubUser,
-      FToken, FCfg.MachineName, FCfg.CommitDebounceMs, FCfg.GcEveryNCommits,
-      FCfg.PullIntervalSec, FCfg.HistoryCap, FStatus, FCfg.IgnoreGlobs);
-    SetLength(FWorkers, Length(FWorkers) + 1);
-    FWorkers[High(FWorkers)] := w;
-    w.Start;
+    if Assigned(FStatus) then
+      FStatus.SetState(GOTBOX_REPO, rsError, 'root not set up');
+    FRunning := True;   // still "running" (just nothing to do) so Stop is symmetric
+    Exit;
   end;
+
+  subs := ListSubmodules(FCfg.RootDir);
+
+  // 1) root worker: sync loose files, excluding the submodule directories
+  subNames := TStringList.Create;
+  try
+    for i := 0 to High(subs) do
+      subNames.Add(subs[i].LocalName);
+    SpawnWorker(GOTBOX_REPO, FCfg.RootDir, subNames);
+  finally
+    subNames.Free;
+  end;
+
+  // 2) one worker per submodule (honour the per-submodule Paused flag)
+  for i := 0 to High(subs) do
+  begin
+    paused := FCfg.FindRepo(subs[i].LocalName, entry) and entry.Paused;
+    if paused then
+    begin
+      if Assigned(FStatus) then
+        FStatus.SetState(subs[i].LocalName, rsPaused, 'paused');
+      Continue;
+    end;
+    if not IsGitWorkTree(LocalPathOf(subs[i].LocalName)) then
+    begin
+      if Assigned(FStatus) then
+        FStatus.SetState(subs[i].LocalName, rsError, 'submodule not checked out');
+      Continue;
+    end;
+    SpawnWorker(subs[i].LocalName, LocalPathOf(subs[i].LocalName), nil);
+  end;
+
   FRunning := True;
   if Assigned(Log) then
     Log.Info('engine', Format('started %d worker(s)', [Length(FWorkers)]));
