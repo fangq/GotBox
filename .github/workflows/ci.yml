@@ -40,10 +40,11 @@ jobs:
         run: fpcres -of res -o gotbox.res gotbox.rc
 
       # compiles gboxfilewatcher with this OS's native backend
-      # (inotify / ReadDirectoryChangesW / FSEvents)
+      # (inotify / ReadDirectoryChangesW / FSEvents); Release mode also exercises
+      # the optimized + smart-linked + stripped build path
       - name: Build GUI app
         shell: bash
-        run: lazbuild gotbox.lpi
+        run: lazbuild --build-mode=Release gotbox.lpi
 
       # builds + runs the console suite; each test is run under a hard timeout
       - name: Build & run tests
