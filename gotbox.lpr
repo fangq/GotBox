@@ -20,6 +20,8 @@ begin
   Application.Title := 'GotBox';
   Application.Scaled := True;
   Application.Initialize;
+  // tray-only app: never show the hidden main (tray-host) form
+  Application.ShowMainForm := False;
   Application.CreateForm(TMainForm, MainForm);
   Application.CreateForm(TLoginForm, LoginForm);
   Application.CreateForm(TConfigForm, ConfigForm);
