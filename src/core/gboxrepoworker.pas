@@ -12,7 +12,7 @@ interface
 
 uses
   Classes, SysUtils, DateUtils, SyncObjs,
-  gboxgitrunner, gboxfilewatcher, gboxstatusmodel, gboxsync;
+  gboxgitrunner, gboxfilewatcher, gboxstatusmodel, gboxsync, gboxhistory;
 
 type
   TRepoWorker = class(TThread)
@@ -25,6 +25,7 @@ type
     FDebounceMs: Integer;
     FGcEvery: Integer;
     FPullIntervalMs: Integer;
+    FHistoryCap: Integer;
     FStatus: TStatusModel;
     FIgnore: TStringList;
     FWatcher: TFileWatcher;
@@ -40,8 +41,8 @@ type
     procedure Execute; override;
   public
     constructor Create(const AName, ALocalPath, AUser, AToken, AMachine: string;
-      ADebounceMs, AGcEvery, APullIntervalSec: Integer; AStatus: TStatusModel;
-      AIgnore: TStrings);
+      ADebounceMs, AGcEvery, APullIntervalSec, AHistoryCap: Integer;
+      AStatus: TStatusModel; AIgnore: TStrings);
     destructor Destroy; override;
     { Request an immediate sync (e.g. the user chose "Sync now"). }
     procedure RequestSync;
@@ -56,8 +57,8 @@ uses
   gboxlog;
 
 constructor TRepoWorker.Create(const AName, ALocalPath, AUser, AToken, AMachine: string;
-  ADebounceMs, AGcEvery, APullIntervalSec: Integer; AStatus: TStatusModel;
-  AIgnore: TStrings);
+  ADebounceMs, AGcEvery, APullIntervalSec, AHistoryCap: Integer;
+  AStatus: TStatusModel; AIgnore: TStrings);
 begin
   inherited Create(True);            // suspended; caller calls Start
   FreeOnTerminate := False;
@@ -69,6 +70,7 @@ begin
   FDebounceMs := ADebounceMs;
   FGcEvery := AGcEvery;
   FPullIntervalMs := APullIntervalSec * 1000;
+  FHistoryCap := AHistoryCap;
   FStatus := AStatus;
   FLock := TCriticalSection.Create;
   FIgnore := TStringList.Create;
@@ -116,7 +118,7 @@ procedure TRepoWorker.DoSyncCycle;
 var
   git: TGitRunner;
   outcome: TSyncOutcome;
-  detail: string;
+  detail, td: string;
   conflicts: TStringList;
 begin
   if Assigned(FStatus) then FStatus.SetState(FName, rsSyncing, '');
@@ -166,6 +168,17 @@ begin
     begin
       git.Gc;
       FCommitsSinceGc := 0;
+    end;
+
+    // cap history once it has grown well past the limit (squash + force-push)
+    if (outcome <> soError) and ShouldTrim(git, FHistoryCap) then
+    begin
+      if TrimHistory(git, FHistoryCap, td) then
+      begin
+        if Assigned(FStatus) then FStatus.SetState(FName, rsSynced, 'history trimmed');
+      end
+      else if Assigned(Log) then
+        Log.Warn('worker', FName + ' trim: ' + td);
     end;
   finally
     git.Free;

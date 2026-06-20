@@ -95,7 +95,7 @@ begin
 
   // small debounce so the test is quick; gc disabled
   worker := TRepoWorker.Create('proj', projDir, 'tester', '', 'testbox',
-    300, 0, 0, nil, cfg.IgnoreGlobs);
+    300, 0, 0, 0, nil, cfg.IgnoreGlobs);
   try
     worker.Start;
     Sleep(2500);                       // let the watcher establish a baseline

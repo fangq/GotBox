@@ -123,6 +123,11 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="gboxsync"/>
       </Unit>
+      <Unit>
+        <Filename Value="src/core/gboxhistory.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxhistory"/>
+      </Unit>
     </Units>
   </ProjectOptions>
   <CompilerOptions>
