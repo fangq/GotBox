@@ -17,4 +17,5 @@ gotbox.res
 # console test binaries + their build dir
 /tests/testgit
 /tests/testauth
+/tests/testlink
 /tests/lib/

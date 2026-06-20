@@ -93,6 +93,11 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="gboxgithubapi"/>
       </Unit>
+      <Unit>
+        <Filename Value="src/core/gboxrepolink.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxrepolink"/>
+      </Unit>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

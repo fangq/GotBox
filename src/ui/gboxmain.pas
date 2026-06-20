@@ -10,7 +10,8 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Menus, ExtCtrls, Dialogs,
-  LCLType, LCLIntf, gboxconfigstore, gboxstatusmodel, gboxlog;
+  LCLType, LCLIntf, gboxconfigstore, gboxstatusmodel, gboxlog,
+  gboxcredstore, gboxrepolink;
 
 type
   TMainForm = class(TForm)
@@ -28,6 +29,7 @@ type
     procedure StatusModelChanged;
     // menu handlers
     procedure mnuOpenRoot(Sender: TObject);
+    procedure mnuScanLink(Sender: TObject);
     procedure mnuSyncNow(Sender: TObject);
     procedure mnuStatus(Sender: TObject);
     procedure mnuSettings(Sender: TObject);
@@ -101,6 +103,7 @@ procedure TMainForm.BuildTrayMenu;
 
 begin
   AddItem('Open root folder', @mnuOpenRoot);
+  AddItem('Scan && link folders', @mnuScanLink);
   AddItem('Sync now', @mnuSyncNow);
   AddSep;
   AddItem('Status...', @mnuStatus);
@@ -139,6 +142,62 @@ begin
     OpenDocument(FConfig.RootDir)
   else
     ShowMessage('No root folder configured yet. Open Settings to choose one.');
+end;
+
+procedure TMainForm.mnuScanLink(Sender: TObject);
+var
+  cred: TCredStore;
+  token, msg: string;
+  linker: TRepoLinker;
+  res: TLinkResultArray;
+  i, nOk, nErr: Integer;
+begin
+  if (FConfig.RootDir = '') or not DirectoryExists(FConfig.RootDir) then
+  begin
+    ShowMessage('Set a valid root folder in Settings first.');
+    Exit;
+  end;
+  if FConfig.GithubUser = '' then
+  begin
+    ShowMessage('Sign in with the Account window first.');
+    Exit;
+  end;
+
+  cred := TCredStore.Create;
+  try
+    if not cred.LoadToken(FConfig.GithubUser, token) then
+    begin
+      ShowMessage('No stored token found. Use Account to sign in again.');
+      Exit;
+    end;
+  finally
+    cred.Free;
+  end;
+
+  // Blocking scan (talks to GitHub). Acceptable for a manual action; the
+  // continuous sync engine (milestone 5) will move this onto worker threads.
+  Screen.Cursor := crHourGlass;
+  try
+    linker := TRepoLinker.Create(FConfig, token, FStatus);
+    try
+      res := linker.ScanAndLink;
+    finally
+      linker.Free;
+    end;
+  finally
+    Screen.Cursor := crDefault;
+  end;
+
+  FStore.Save(FConfig);
+  nOk := 0;
+  nErr := 0;
+  for i := 0 to High(res) do
+    if res[i].Action = laError then Inc(nErr)
+    else
+      Inc(nOk);
+  msg := Format('Linked %d folder(s), %d error(s).', [nOk, nErr]);
+  Log.Info('link', msg);
+  ShowMessage(msg);
 end;
 
 procedure TMainForm.mnuSyncNow(Sender: TObject);
