@@ -110,6 +110,9 @@ begin
     if committer = '' then committer := 'gotbox';
     git.Git(['config', 'user.name', committer]);
     git.Git(['config', 'user.email', committer + '@gotbox.local']);
+    // record renames/moves rather than delete+add (content is already deduped
+    // by blob hash, but this keeps history clean)
+    git.Git(['config', 'diff.renames', 'copies']);
 
     // give a brand-new repo an initial commit so `main` exists -- use
     // --allow-empty so even an empty folder gets a valid branch to push

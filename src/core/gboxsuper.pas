@@ -45,10 +45,62 @@ function ListSubmodules(const ARoot: string): TSubmoduleArray;
   .gotbox repo when files/folders appear before any submodule is linked. }
 function RootHasContent(const ARoot: string): Boolean;
 
+{ True if APath is a git working tree (a submodule's .git is a FILE, the
+  superproject's is a directory -- accept either). }
+function IsGitWorkTree(const APath: string): Boolean;
+
 implementation
 
 uses
   gboxlog;
+
+function IsGitWorkTree(const APath: string): Boolean;
+var
+  dot: string;
+begin
+  dot := IncludeTrailingPathDelimiter(APath) + '.git';
+  Result := DirectoryExists(dot) or FileExists(dot);
+end;
+
+{ Recursively clone an existing remote .gotbox into the (empty) root. }
+function CloneGotboxRoot(AProv: TRemoteProvider; const ARoot, AMachine: string;
+  out ADetail: string): Boolean;
+var
+  git: TGitRunner;
+  r: TGitResult;
+  who: string;
+begin
+  ADetail := '';
+  git := TGitRunner.Create('');
+  git.AuthUser := AProv.AuthUser;
+  git.AuthToken := AProv.AuthToken;
+  try
+    // --recursive brings the submodules down too; allow file:// for local/tests
+    r := git.Git(['-c', 'protocol.file.allow=always', 'clone',
+      '--recursive', AProv.PushUrl(GOTBOX_REPO), ExcludeTrailingPathDelimiter(ARoot)]);
+    if not r.Ok then
+    begin
+      ADetail := 'clone failed: ' + Trim(r.StdErr);
+      Exit(False);
+    end;
+  finally
+    git.Free;
+  end;
+
+  // committer identity on the freshly cloned tree
+  git := TGitRunner.Create(ARoot);
+  try
+    who := AProv.AuthUser;
+    if who = '' then who := AMachine;
+    if who = '' then who := 'gotbox';
+    git.Git(['config', 'user.name', who]);
+    git.Git(['config', 'user.email', who + '@gotbox.local']);
+  finally
+    git.Free;
+  end;
+  Result := True;
+  if Assigned(Log) then Log.Info('super', '.gotbox cloned to ' + ARoot);
+end;
 
 function EnsureGotboxRoot(ACfg: TGotConfig; const AToken: string;
   out ADetail: string): Boolean;
@@ -61,6 +113,15 @@ begin
   ADetail := '';
   prov := MakeProvider(ACfg, AToken);
   try
+    // fresh machine: remote .gotbox already exists and the root isn't a repo
+    // yet -- recursively clone it (brings submodules too) rather than init.
+    if (not IsGitWorkTree(ACfg.RootDir)) and (not RootHasContent(ACfg.RootDir)) and
+      prov.RemoteExists(GOTBOX_REPO) then
+    begin
+      Result := CloneGotboxRoot(prov, ACfg.RootDir, ACfg.MachineName, ADetail);
+      Exit;
+    end;
+
     ens := prov.EnsureRemote(GOTBOX_REPO, ADetail);
     if ens = erError then Exit;
     // reuse the repo-linker's git-side wiring (init + remote + identity +

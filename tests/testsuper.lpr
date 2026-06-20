@@ -68,7 +68,7 @@ var
 
 var
   base, root, detail, outp: string;
-  cfg: TGotConfig;
+  cfg, cfg2: TGotConfig;
   subs: TSubmoduleArray;
 begin
   Randomize;
@@ -126,6 +126,21 @@ begin
   // 4) list submodules
   subs := ListSubmodules(root);
   Check(Length(subs) = 2, 'lists 2 submodules (got ' + IntToStr(Length(subs)) + ')');
+
+  // 5) second machine: EnsureGotboxRoot on an empty root clones --recursive
+  cfg2 := TGotConfig.Create;
+  cfg2.RootDir := IncludeTrailingPathDelimiter(base) + 'root2';
+  cfg2.MachineName := 'box2';
+  cfg2.RemoteKind := 'git';
+  cfg2.SshBase := ExcludeTrailingPathDelimiter(base);
+  Check(EnsureGotboxRoot(cfg2, '', detail), 'second machine clones .gotbox (' +
+    detail + ')');
+  Check(IsGitWorkTree(cfg2.RootDir), 'root2 is a git work tree');
+  Check(DirectoryExists(IncludeTrailingPathDelimiter(cfg2.RootDir) + 'docs'),
+    'submodule "docs" checked out on root2');
+  Check(FileExists(IncludeTrailingPathDelimiter(cfg2.RootDir) + 'docs' +
+    PathDelim + 'seed.txt'), 'submodule content present on root2 (recursive clone)');
+  cfg2.Free;
 
   cfg.Free;
   WriteLn;

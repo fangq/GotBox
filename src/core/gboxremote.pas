@@ -25,6 +25,8 @@ type
     { Make sure the remote repo exists, creating it when possible. }
     function EnsureRemote(const AName: string; out ADetail: string): TEnsureRemote;
       virtual; abstract;
+    { Non-creating existence check. }
+    function RemoteExists(const AName: string): Boolean; virtual; abstract;
     function AuthUser: string; virtual;
     function AuthToken: string; virtual;
   end;
@@ -38,6 +40,7 @@ type
     function DisplayUrl(const AName: string): string; override;
     function EnsureRemote(const AName: string; out ADetail: string): TEnsureRemote;
       override;
+    function RemoteExists(const AName: string): Boolean; override;
     function AuthUser: string; override;
     function AuthToken: string; override;
   end;
@@ -52,6 +55,7 @@ type
     function DisplayUrl(const AName: string): string; override;
     function EnsureRemote(const AName: string; out ADetail: string): TEnsureRemote;
       override;
+    function RemoteExists(const AName: string): Boolean; override;
   end;
 
 { Builds the provider for a config (token only needed for the github kind). }
@@ -198,6 +202,18 @@ begin
   end;
 end;
 
+function TGitHubProvider.RemoteExists(const AName: string): Boolean;
+var
+  api: TGitHubApi;
+begin
+  api := TGitHubApi.Create(FToken);
+  try
+    Result := api.RepoExists(FUser, AName);
+  finally
+    api.Free;
+  end;
+end;
+
 function TGitHubProvider.AuthUser: string;
 begin
   Result := FUser;
@@ -236,13 +252,7 @@ begin
   ADetail := '';
   url := PushUrl(AName);
 
-  // already there?
-  git := TGitRunner.Create('');
-  try
-    if git.Git(['ls-remote', url]).Ok then Exit(erExists);
-  finally
-    git.Free;
-  end;
+  if RemoteExists(AName) then Exit(erExists);
 
   // create it
   if ParseSshTarget(url, hostArg, port, path) then
@@ -271,6 +281,18 @@ begin
   end;
   ADetail := 'could not create remote ' + url;
   Result := erError;
+end;
+
+function TGitProvider.RemoteExists(const AName: string): Boolean;
+var
+  git: TGitRunner;
+begin
+  git := TGitRunner.Create('');
+  try
+    Result := git.Git(['ls-remote', PushUrl(AName)]).Ok;
+  finally
+    git.Free;
+  end;
 end;
 
 { ---- factory ---- }

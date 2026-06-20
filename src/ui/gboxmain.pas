@@ -39,6 +39,7 @@ type
     procedure StatusModelChanged;
     procedure StartEngine;
     procedure StopEngine;
+    procedure MaybePromptLogin;
     function PrepareRemote(out AToken, AErr: string): Boolean;
     // status-window actions
     procedure HandleTogglePause(const ARepo: string);
@@ -90,6 +91,8 @@ begin
   TrayIcon.Visible := True;
   FLastAgg := rsIdle;
   UpdateTrayState;
+
+  MaybePromptLogin;  // ask for GitHub creds up front if they're missing
 
   StartEngine;   // begin syncing if the .gotbox root already exists
   TryBootstrap;  // or auto-create .gotbox if content already sits in the root
@@ -289,6 +292,36 @@ procedure TMainForm.StopEngine;
 begin
   if Assigned(FEngine) then
     FreeAndNil(FEngine);   // TSyncEngine.Destroy stops + joins the workers
+end;
+
+{ At startup, if the GitHub backend is selected but the username or token is
+  missing, show the login dialog. The ssh backend uses keys, so nothing to ask. }
+procedure TMainForm.MaybePromptLogin;
+var
+  cred: TCredStore;
+  tok: string;
+  haveCreds: Boolean;
+begin
+  if SameText(FConfig.RemoteKind, 'git') then Exit;   // ssh keys; nothing to collect
+
+  haveCreds := False;
+  if FConfig.GithubUser <> '' then
+  begin
+    cred := TCredStore.Create;
+    try
+      haveCreds := cred.LoadToken(FConfig.GithubUser, tok);
+    finally
+      cred.Free;
+    end;
+  end;
+  if haveCreds then Exit;
+
+  if LoginForm.RunLogin(FConfig) then
+  begin
+    FStore.Save(FConfig);
+    if Assigned(Log) then
+      Log.Info('ui', 'account set at startup for ' + FConfig.GithubUser);
+  end;
 end;
 
 { Event-driven bootstrap: if the backend is configured and the .gotbox root

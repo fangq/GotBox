@@ -37,22 +37,10 @@ type
     function WorkerCount: Integer;
   end;
 
-{ True if APath is a git working tree (a submodule's .git is a FILE, the
-  superproject's is a directory -- accept either). }
-function IsGitWorkTree(const APath: string): Boolean;
-
 implementation
 
 uses
   gboxlog;
-
-function IsGitWorkTree(const APath: string): Boolean;
-var
-  dot: string;
-begin
-  dot := IncludeTrailingPathDelimiter(APath) + '.git';
-  Result := DirectoryExists(dot) or FileExists(dot);
-end;
 
 constructor TSyncEngine.Create(ACfg: TGotConfig; const AToken: string;
   AStatus: TStatusModel);
