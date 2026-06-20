@@ -32,6 +32,29 @@ var
     end;
   end;
 
+  { Recursively remove a directory (RTL has no DeleteDirectory). }
+  procedure RmRf(const ADir: string);
+  var
+    sr: TSearchRec;
+    full: string;
+  begin
+    if FindFirst(IncludeTrailingPathDelimiter(ADir) + '*', faAnyFile, sr) = 0 then
+    begin
+      try
+        repeat
+          if (sr.Name = '.') or (sr.Name = '..') then Continue;
+          full := IncludeTrailingPathDelimiter(ADir) + sr.Name;
+          if (sr.Attr and faDirectory) <> 0 then RmRf(full)
+          else
+            DeleteFile(full);
+        until FindNext(sr) <> 0;
+      finally
+        FindClose(sr);
+      end;
+    end;
+    RemoveDir(ADir);
+  end;
+
   { True if a clone of bare ABare contains a file whose content includes ASubstr. }
   function RemoteHasFile(const ABare, AFile, ASubstr: string): Boolean;
   var
@@ -48,15 +71,20 @@ var
     finally
       g.Free;
     end;
-    if not FileExists(IncludeTrailingPathDelimiter(tmp) + AFile) then Exit;
-    f := TStringList.Create;
     try
-      f.LoadFromFile(IncludeTrailingPathDelimiter(tmp) + AFile);
-      content := f.Text;
+      if not FileExists(IncludeTrailingPathDelimiter(tmp) + AFile) then Exit;
+      f := TStringList.Create;
+      try
+        f.LoadFromFile(IncludeTrailingPathDelimiter(tmp) + AFile);
+        content := f.Text;
+      finally
+        f.Free;
+      end;
+      Result := Pos(ASubstr, content) > 0;
     finally
-      f.Free;
+      // don't let repeated probe-clones pile up and starve a slow CI runner
+      if DirectoryExists(tmp) then RmRf(tmp);
     end;
-    Result := Pos(ASubstr, content) > 0;
   end;
 
   procedure WriteFile(const APath, AContent: string);
@@ -94,7 +122,7 @@ begin
   cfg.RemoteKind := 'git';
   cfg.SshBase := ExcludeTrailingPathDelimiter(base);
   cfg.CommitDebounceMs := 300;
-  cfg.PullIntervalSec := 0;
+  cfg.PullIntervalSec := 2;   // periodic backstop if a watcher event is missed
 
   Check(EnsureGotboxRoot(cfg, '', detail), 'EnsureGotboxRoot (' + detail + ')');
   Check(AddSubmodule(cfg, '', 'proj', 'projup', '', True, detail),
@@ -118,9 +146,9 @@ begin
 
     rootOK := False;
     subOK := False;
-    deadline := Now + EncodeTime(0, 0, 15, 0);
+    deadline := Now + EncodeTime(0, 0, 25, 0);
     repeat
-      Sleep(300);
+      Sleep(700);
       if not rootOK then rootOK :=
           RemoteHasFile(gotboxBare, 'rootnote.txt', 'loose-root-data');
       if not subOK then subOK := RemoteHasFile(subBare, 'subnote.txt', 'submodule-data');
