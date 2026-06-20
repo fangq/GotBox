@@ -70,6 +70,11 @@ end;
 
 function TConfigForm.Edit(ACfg: TGotConfig): Boolean;
 begin
+  Result := False;
+  if Visible then begin
+    BringToFront;
+    Exit;
+  end;   // already open; don't re-ShowModal
   eRoot.Text := ACfg.RootDir;
   if SameText(ACfg.RemoteKind, 'git') then cboKind.ItemIndex := 1
   else

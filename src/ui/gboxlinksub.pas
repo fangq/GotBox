@@ -74,6 +74,11 @@ end;
 
 function TLinkSubForm.Run: Boolean;
 begin
+  Result := False;
+  if Visible then begin
+    BringToFront;
+    Exit;
+  end;
   eName.Text := '';
   eUpstream.Text := '';
   eUrl.Text := '';

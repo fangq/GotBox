@@ -96,6 +96,11 @@ end;
 
 function TLoginForm.RunLogin(ACfg: TGotConfig): Boolean;
 begin
+  Result := False;
+  if Visible then begin
+    BringToFront;
+    Exit;
+  end;
   FToken := '';
   eUser.Text := ACfg.GithubUser;
   ePat.Text := '';

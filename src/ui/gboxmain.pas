@@ -481,8 +481,11 @@ begin
   StatusForm.OnSyncRepo := @HandleSyncRepo;
   StatusForm.OnOpenRepo := @HandleOpenRepo;
   StatusForm.Bind(FStatus);
-  CenterForm(StatusForm);
-  StatusForm.Show;
+  if not StatusForm.Visible then
+  begin
+    CenterForm(StatusForm);
+    StatusForm.Show;
+  end;
   StatusForm.BringToFront;
   StatusForm.SetFocus;
 end;
