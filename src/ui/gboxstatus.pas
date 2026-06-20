@@ -35,6 +35,8 @@ type
     FOnTogglePause: TRepoActionEvent;
     FOnSyncRepo: TRepoActionEvent;
     FOnOpenRepo: TRepoActionEvent;
+    FLastGridSig: string;   // only redraw grid/log when content actually changes
+    FLastLog: string;
     function SelectedRepo: string;
     procedure Refresh;
   public
@@ -108,20 +110,41 @@ var
   snap: TRepoStatusArray;
   i: Integer;
   lines: TStringList;
+  sig, lastSync, logText: string;
 begin
   if Assigned(FStatus) then
   begin
     snap := FStatus.Snapshot;
-    grid.RowCount := Length(snap) + 1;
+    // build a signature; only rebuild the grid when it changes (avoids flicker)
+    sig := '';
     for i := 0 to High(snap) do
     begin
-      grid.Cells[0, i + 1] := snap[i].LocalName;
-      grid.Cells[1, i + 1] := RepoStateText(snap[i].State);
-      grid.Cells[2, i + 1] := IntToStr(snap[i].PendingChanges);
       if snap[i].LastSync > 0 then
-        grid.Cells[3, i + 1] := FormatDateTime('hh:nn:ss', snap[i].LastSync)
+        lastSync := FormatDateTime('hh:nn:ss', snap[i].LastSync)
       else
-        grid.Cells[3, i + 1] := '-';
+        lastSync := '-';
+      sig := sig + snap[i].LocalName + '|' + RepoStateText(snap[i].State) +
+        '|' + IntToStr(snap[i].PendingChanges) + '|' + lastSync + #10;
+    end;
+    if sig <> FLastGridSig then
+    begin
+      FLastGridSig := sig;
+      grid.BeginUpdate;
+      try
+        grid.RowCount := Length(snap) + 1;
+        for i := 0 to High(snap) do
+        begin
+          grid.Cells[0, i + 1] := snap[i].LocalName;
+          grid.Cells[1, i + 1] := RepoStateText(snap[i].State);
+          grid.Cells[2, i + 1] := IntToStr(snap[i].PendingChanges);
+          if snap[i].LastSync > 0 then
+            grid.Cells[3, i + 1] := FormatDateTime('hh:nn:ss', snap[i].LastSync)
+          else
+            grid.Cells[3, i + 1] := '-';
+        end;
+      finally
+        grid.EndUpdate;
+      end;
     end;
   end;
 
@@ -129,13 +152,24 @@ begin
   begin
     lines := Log.Snapshot;
     try
-      // show only the tail to keep the memo light
       while lines.Count > 200 do
-        lines.Delete(0);
-      mLog.Lines.Assign(lines);
-      mLog.SelStart := Length(mLog.Text);
+        lines.Delete(0);   // show only the tail to keep the memo light
+      logText := lines.Text;
     finally
       lines.Free;
+    end;
+    // only repopulate when there's new output -- reassigning every tick flashes
+    // the memo and yanks the scroll position
+    if logText <> FLastLog then
+    begin
+      FLastLog := logText;
+      mLog.Lines.BeginUpdate;
+      try
+        mLog.Text := logText;
+      finally
+        mLog.Lines.EndUpdate;
+      end;
+      mLog.SelStart := Length(mLog.Text);   // scroll to newest only on change
     end;
   end;
 end;
