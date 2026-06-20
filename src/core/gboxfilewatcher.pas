@@ -457,6 +457,9 @@ function ReadDirectoryChangesW(hDirectory: THandle; lpBuffer: Pointer;
   lpCompletionRoutine: Pointer): BOOL; stdcall;
   external 'kernel32' name 'ReadDirectoryChangesW';
 
+function CancelIoEx(hFile: THandle; lpOverlapped: POverlapped): BOOL; stdcall;
+  external 'kernel32' name 'CancelIoEx';
+
 type
   TWinWatchThread = class;
 
@@ -540,15 +543,19 @@ end;
 procedure TWinFileWatcher.Stop;
 begin
   if Assigned(FThread) then FThread.Terminate;
+  // CancelIoEx reliably aborts the pending synchronous ReadDirectoryChangesW
+  // (merely closing the handle does not always unblock it).
   if FDir <> INVALID_HANDLE_VALUE then
-  begin
-    CloseHandle(FDir);   // unblocks the pending ReadDirectoryChangesW
-    FDir := INVALID_HANDLE_VALUE;
-  end;
+    CancelIoEx(FDir, nil);
   if Assigned(FThread) then
   begin
     FThread.WaitFor;
     FreeAndNil(FThread);
+  end;
+  if FDir <> INVALID_HANDLE_VALUE then
+  begin
+    CloseHandle(FDir);
+    FDir := INVALID_HANDLE_VALUE;
   end;
 end;
 {$ENDIF}

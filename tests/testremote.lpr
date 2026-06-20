@@ -66,8 +66,9 @@ begin
   ForceDirectories(base);
   prov := TGitProvider.Create(base);
   try
-    Check(prov.PushUrl('foo') = IncludeTrailingPathDelimiter(base) + 'foo.git',
-      'push url for local base');
+    // JoinRemote always uses '/' (a remote URL separator), regardless of the
+    // host path separator -- so compare against that, not the OS delimiter.
+    Check(prov.PushUrl('foo') = base + '/foo.git', 'push url for local base');
     Check(prov.EnsureRemote('foo', detail) = erCreated, 'creates local bare repo (' +
       detail + ')');
     Check(DirectoryExists(IncludeTrailingPathDelimiter(base) + 'foo.git'),
