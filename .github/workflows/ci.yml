@@ -51,25 +51,22 @@ jobs:
         shell: bash
         run: tests/run.sh
 
-  # Verify the project still compiles on the old Lazarus/FPC that ships with
-  # Ubuntu 20.04 (Lazarus 2.0.6 / FPC 3.0.4), run inside a focal container.
+  # Verify the project still compiles on the older Lazarus that ships with
+  # Ubuntu 22.04 (Lazarus 2.2 / FPC 3.2.x) via apt -- covers Lazarus 2.x users.
   compat-lazarus2:
-    name: compat (ubuntu 20.04 / lazarus 2.0)
-    runs-on: ubuntu-latest
-    container: ubuntu:20.04
+    name: compat (ubuntu 22.04 / lazarus 2.2)
+    runs-on: ubuntu-22.04
     steps:
-      - name: Install Lazarus 2.0 + FPC 3.0 (focal)
+      - uses: actions/checkout@v5
+      - name: Install Lazarus 2.2 + FPC (jammy apt)
         run: |
-          export DEBIAN_FRONTEND=noninteractive
-          apt-get update
-          apt-get install -y --no-install-recommends lazarus git ca-certificates
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends lazarus
           fpc -iV
           lazbuild --version | tail -1
-      - uses: actions/checkout@v5
       - name: Generate project resource
         run: fpcres -of res -o gotbox.res gotbox.rc
-      # default (debug) mode -- the Release build-mode XML may differ across
-      # Lazarus versions; here we only care that the sources compile on 2.0
+      # default (debug) mode -- only checking the sources compile on Lazarus 2.x
       - name: Build GUI app
         run: lazbuild gotbox.lpi
       - name: Build & run tests
