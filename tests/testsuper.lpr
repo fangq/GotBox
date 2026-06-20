@@ -27,6 +27,28 @@ var
     end;
   end;
 
+  procedure RmRf(const ADir: string);
+  var
+    sr: TSearchRec;
+    full: string;
+  begin
+    if FindFirst(IncludeTrailingPathDelimiter(ADir) + '*', faAnyFile, sr) = 0 then
+    begin
+      try
+        repeat
+          if (sr.Name = '.') or (sr.Name = '..') then Continue;
+          full := IncludeTrailingPathDelimiter(ADir) + sr.Name;
+          if (sr.Attr and faDirectory) <> 0 then RmRf(full)
+          else
+            DeleteFile(full);
+        until FindNext(sr) <> 0;
+      finally
+        FindClose(sr);
+      end;
+    end;
+    RemoveDir(ADir);
+  end;
+
   function Git(const ADir: string; const AArgs: array of string;
     out AOut: string): Boolean;
   var
@@ -141,6 +163,18 @@ begin
   Check(FileExists(IncludeTrailingPathDelimiter(cfg2.RootDir) + 'docs' +
     PathDelim + 'seed.txt'), 'submodule content present on root2 (recursive clone)');
   cfg2.Free;
+
+  // 6) resurrect: remote .gotbox deleted but local tree exists -> EnsureGotboxRoot
+  //    recreates the remote and pushes the local content back
+  RmRf(IncludeTrailingPathDelimiter(base) + '.gotbox.git');
+  Check(not DirectoryExists(IncludeTrailingPathDelimiter(base) + '.gotbox.git'),
+    'remote .gotbox deleted');
+  Check(EnsureGotboxRoot(cfg, '', detail), 'resurrect recreates .gotbox (' +
+    detail + ')');
+  Check(DirectoryExists(IncludeTrailingPathDelimiter(base) + '.gotbox.git'),
+    'remote .gotbox bare recreated');
+  Git(root, ['ls-remote', 'origin', 'refs/heads/main'], outp);
+  Check(Trim(outp) <> '', 'local content repushed to recreated remote');
 
   cfg.Free;
   WriteLn;

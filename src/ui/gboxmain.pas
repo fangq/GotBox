@@ -267,7 +267,7 @@ end;
 
 procedure TMainForm.StartEngine;
 var
-  token, err: string;
+  token, err, detail: string;
 begin
   StopEngine;
   // only run once the .gotbox root has been set up locally
@@ -277,6 +277,13 @@ begin
     if Assigned(Log) then Log.Warn('engine', 'sync not started: ' + err);
     Exit;
   end;
+
+  // Reconcile the root with its remote: if the remote .gotbox was deleted, this
+  // recreates the private repo and pushes the local content back (resurrect).
+  // Confirmed via authenticated REST, so it won't misfire on an auth 404.
+  if not EnsureGotboxRoot(FConfig, token, detail) then
+    if Assigned(Log) then
+      Log.Warn('engine', 'root reconcile: ' + detail);   // proceed anyway
 
   FEngine := TSyncEngine.Create(FConfig, token, FStatus);
   FEngine.Start;

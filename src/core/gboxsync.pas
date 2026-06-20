@@ -89,7 +89,15 @@ begin
   if not r.Ok then
   begin
     CommitLocal;   // at least keep local work safe
-    ADetail := 'fetch failed (offline?): ' + Trim(r.StdErr);
+    if (Pos('not found', LowerCase(r.StdErr)) > 0) or
+      (Pos('does not exist', LowerCase(r.StdErr)) > 0) then
+      ADetail := 'remote not found (deleted or no access): ' + Trim(r.StdErr)
+    else if (Pos('could not resolve', LowerCase(r.StdErr)) > 0) or
+      (Pos('could not read', LowerCase(r.StdErr)) > 0) or
+      (Pos('timed out', LowerCase(r.StdErr)) > 0) then
+      ADetail := 'offline: ' + Trim(r.StdErr)
+    else
+      ADetail := 'fetch failed: ' + Trim(r.StdErr);
     Exit(soError);
   end;
 
