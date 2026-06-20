@@ -47,6 +47,7 @@ var
 
 var
   base, root, projDir, bareRepo, detail, outp: string;
+  emptyDir, emptyBare: string;
   cfg: TGotConfig;
   linker: TRepoLinker;
   ok: Boolean;
@@ -86,8 +87,8 @@ begin
         'local .git created');
 
       // remote now has the commit on main
-      Check(RunGit(projDir, ['ls-remote', 'origin', 'refs/heads/main'],
-        outp) and (Trim(outp) <> ''), 'pushed main to remote');
+      Check(RunGit(projDir, ['ls-remote', 'origin', 'refs/heads/main'], outp) and
+        (Trim(outp) <> ''), 'pushed main to remote');
 
       // committer identity was set
       RunGit(projDir, ['config', 'user.name'], outp);
@@ -96,6 +97,17 @@ begin
       // second call is idempotent (already a repo, has commits, nothing to push)
       ok := linker.EnsureLocalRepo(projDir, bareRepo, False, detail);
       Check(ok, 'EnsureLocalRepo (existing) idempotent: ' + detail);
+
+      // a brand-new EMPTY folder must still get an initial commit + main pushed
+      emptyDir := IncludeTrailingPathDelimiter(root) + 'empty';
+      emptyBare := IncludeTrailingPathDelimiter(base) + 'empty.git';
+      ForceDirectories(emptyDir);
+      ForceDirectories(emptyBare);
+      RunGit(emptyBare, ['init', '--bare', '-b', 'main'], outp);
+      ok := linker.EnsureLocalRepo(emptyDir, emptyBare, True, detail);
+      Check(ok, 'EnsureLocalRepo (empty folder) succeeds: ' + detail);
+      Check(RunGit(emptyDir, ['ls-remote', 'origin', 'refs/heads/main'], outp) and
+        (Trim(outp) <> ''), 'empty folder pushed main to remote');
     finally
       linker.Free;
     end;

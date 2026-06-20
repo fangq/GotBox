@@ -97,6 +97,8 @@ begin
   if not AGit.RevParse('origin/main').Ok then
   begin
     if not CommitLocal then Exit(soError);
+    // nothing committed yet (e.g. an empty folder) -> nothing to push
+    if AGit.CountCommits <= 0 then Exit(soUpToDate);
     if PushNow then Exit(soPushed)
     else
       Exit(soError);

@@ -111,10 +111,12 @@ begin
     git.Git(['config', 'user.name', committer]);
     git.Git(['config', 'user.email', committer + '@gotbox.local']);
 
-    if (git.CountCommits <= 0) and git.HasUncommittedChanges then
+    // give a brand-new repo an initial commit so `main` exists -- use
+    // --allow-empty so even an empty folder gets a valid branch to push
+    if git.CountCommits <= 0 then
     begin
       git.AddAll;
-      r := git.CommitAll('initial commit');
+      r := git.Git(['commit', '--allow-empty', '-m', 'initial commit']);
       if not r.Ok then
       begin
         ADetail := 'initial commit failed: ' + Trim(r.StdErr);
