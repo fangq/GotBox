@@ -57,9 +57,8 @@ function GotDataDir: string;
 
 implementation
 
-{$IFDEF WINDOWS}
-uses Windows;
-{$ENDIF}
+{ NOTE: do not pull in the Windows unit here -- its GetEnvironmentVariable
+  (PChar;PChar;DWord) shadows the single-argument SysUtils one we rely on. }
 
 function GotConfigDir: string;
 begin

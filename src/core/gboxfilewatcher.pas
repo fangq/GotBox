@@ -583,7 +583,10 @@ procedure CFRelease(cf: Pointer); cdecl; external;
 function CFRunLoopGetCurrent: CFRunLoopRef; cdecl; external;
 procedure CFRunLoopRun; cdecl; external;
 procedure CFRunLoopStop(rl: CFRunLoopRef); cdecl; external;
-function CFRunLoopCopyCurrentMode(rl: CFRunLoopRef): CFStringRef; cdecl; external;
+
+var
+  { global CoreFoundation constant for the default run-loop mode }
+  kCFRunLoopDefaultMode: CFStringRef; cdecl; external;
 
 type
   FSEventStreamContext = record
@@ -642,7 +645,6 @@ var
   cfPath: CFStringRef;
   cfArr: CFArrayRef;
   ctx: FSEventStreamContext;
-  mode: CFStringRef;
 begin
   FillChar(ctx, SizeOf(ctx), 0);
   ctx.info := Pointer(FOwner);
@@ -652,17 +654,17 @@ begin
     kFSEventStreamEventIdSinceNow, 0.5,
     kFSEventStreamCreateFlagFileEvents or kFSEventStreamCreateFlagNoDefer);
   FRunLoop := CFRunLoopGetCurrent;
-  mode := CFRunLoopCopyCurrentMode(FRunLoop);
   if FStream <> nil then
   begin
-    FSEventStreamScheduleWithRunLoop(FStream, FRunLoop, mode);
+    // schedule on the default mode -- the mode CFRunLoopRun actually runs in.
+    // (CopyCurrentMode returns nil before the loop starts, which then traps.)
+    FSEventStreamScheduleWithRunLoop(FStream, FRunLoop, kCFRunLoopDefaultMode);
     FSEventStreamStart(FStream);
     CFRunLoopRun;   // returns when CFRunLoopStop is called from Stop
     FSEventStreamStop(FStream);
     FSEventStreamInvalidate(FStream);
     FSEventStreamRelease(FStream);
   end;
-  if mode <> nil then CFRelease(mode);
   CFRelease(cfArr);
   CFRelease(cfPath);
 end;
