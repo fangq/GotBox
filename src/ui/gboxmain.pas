@@ -26,12 +26,19 @@ type
     FStatus: TStatusModel;
     FEngine: TSyncEngine;
     FLastAgg: TRepoState;
+    FIcons: array[TRepoState] of TIcon;
     procedure BuildTrayMenu;
+    procedure BuildIcons;
+    procedure FreeIcons;
     procedure UpdateTrayState;
     procedure StatusModelChanged;
     procedure StartEngine;
     procedure StopEngine;
     function PrepareRemote(out AToken, AErr: string): Boolean;
+    // status-window actions
+    procedure HandleTogglePause(const ARepo: string);
+    procedure HandleSyncRepo(const ARepo: string);
+    procedure HandleOpenRepo(const ARepo: string);
     // menu handlers
     procedure mnuOpenRoot(Sender: TObject);
     procedure mnuScanLink(Sender: TObject);
@@ -71,10 +78,12 @@ begin
   FStatus := TStatusModel.Create;
   FStatus.OnChanged := @StatusModelChanged;
 
+  BuildIcons;
   BuildTrayMenu;
   TrayIcon.PopUpMenu := TrayMenu;
   TrayIcon.Hint := 'GotBox';
   TrayIcon.Visible := True;
+  FLastAgg := rsIdle;
   UpdateTrayState;
 
   StartEngine;   // begin syncing already-linked repos, if any
@@ -87,6 +96,7 @@ begin
   FStatus.Free;
   FConfig.Free;
   FStore.Free;
+  FreeIcons;
   DoneLogger;
 end;
 
@@ -121,6 +131,44 @@ begin
   AddItem('Quit', @mnuQuit);
 end;
 
+procedure TMainForm.BuildIcons;
+
+  function MakeDot(AColor: TColor): TIcon;
+  var
+    bmp: TBitmap;
+  begin
+    bmp := TBitmap.Create;
+    try
+      bmp.SetSize(16, 16);
+      bmp.Canvas.Brush.Color := AColor;
+      bmp.Canvas.FillRect(0, 0, 16, 16);
+      bmp.Canvas.Brush.Style := bsClear;
+      bmp.Canvas.Pen.Color := clBlack;
+      bmp.Canvas.Rectangle(0, 0, 16, 16);
+      Result := TIcon.Create;
+      Result.Assign(bmp);
+    finally
+      bmp.Free;
+    end;
+  end;
+
+begin
+  FIcons[rsIdle] := MakeDot(RGBToColor(149, 165, 166));    // grey
+  FIcons[rsSynced] := MakeDot(RGBToColor(46, 204, 113));   // green
+  FIcons[rsSyncing] := MakeDot(RGBToColor(52, 152, 219));  // blue
+  FIcons[rsConflict] := MakeDot(RGBToColor(243, 156, 18)); // amber
+  FIcons[rsError] := MakeDot(RGBToColor(231, 76, 60));     // red
+  FIcons[rsPaused] := MakeDot(RGBToColor(149, 165, 166));  // grey
+end;
+
+procedure TMainForm.FreeIcons;
+var
+  s: TRepoState;
+begin
+  for s := Low(TRepoState) to High(TRepoState) do
+    FreeAndNil(FIcons[s]);
+end;
+
 procedure TMainForm.UpdateTrayState;
 var
   agg: TRepoState;
@@ -130,8 +178,16 @@ begin
     rsError: TrayIcon.Hint := 'GotBox - error';
     rsConflict: TrayIcon.Hint := 'GotBox - conflict';
     rsSyncing: TrayIcon.Hint := 'GotBox - syncing';
+    rsPaused: TrayIcon.Hint := 'GotBox - paused';
     else
       TrayIcon.Hint := 'GotBox - synced';
+  end;
+
+  // swap the tray icon colour to match the aggregate state
+  if Assigned(FIcons[agg]) then
+  begin
+    TrayIcon.Icon := FIcons[agg];
+    TrayIcon.InternalUpdate;
   end;
 
   // notify the user when we first enter a conflict/error state
@@ -292,9 +348,41 @@ end;
 
 procedure TMainForm.mnuStatus(Sender: TObject);
 begin
+  StatusForm.OnTogglePause := @HandleTogglePause;
+  StatusForm.OnSyncRepo := @HandleSyncRepo;
+  StatusForm.OnOpenRepo := @HandleOpenRepo;
   StatusForm.Bind(FStatus);
   StatusForm.Show;
   StatusForm.BringToFront;
+end;
+
+procedure TMainForm.HandleTogglePause(const ARepo: string);
+var
+  e: TRepoEntry;
+begin
+  if not FConfig.FindRepo(ARepo, e) then Exit;
+  e.Paused := not e.Paused;
+  FConfig.UpsertRepo(e);
+  FStore.Save(FConfig);
+  if Assigned(Log) then
+    if e.Paused then Log.Info('ui', 'paused ' + ARepo)
+    else
+      Log.Info('ui', 'resumed ' + ARepo);
+  StartEngine;   // restart so the new Paused flags take effect
+end;
+
+procedure TMainForm.HandleSyncRepo(const ARepo: string);
+begin
+  if Assigned(FEngine) and FEngine.Running then
+    FEngine.SyncRepo(ARepo);
+end;
+
+procedure TMainForm.HandleOpenRepo(const ARepo: string);
+var
+  p: string;
+begin
+  p := IncludeTrailingPathDelimiter(FConfig.RootDir) + ARepo;
+  if DirectoryExists(p) then OpenDocument(p);
 end;
 
 procedure TMainForm.mnuSettings(Sender: TObject);

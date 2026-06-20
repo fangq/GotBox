@@ -26,6 +26,7 @@ type
     procedure Start;
     procedure Stop;
     procedure SyncAllNow;
+    procedure SyncRepo(const AName: string);
     property Running: Boolean read FRunning;
     function WorkerCount: Integer;
   end;
@@ -65,7 +66,12 @@ begin
   SetLength(FWorkers, 0);
   for i := 0 to High(FCfg.Repos) do
   begin
-    if FCfg.Repos[i].Paused then Continue;
+    if FCfg.Repos[i].Paused then
+    begin
+      if Assigned(FStatus) then
+        FStatus.SetState(FCfg.Repos[i].LocalName, rsPaused, 'paused');
+      Continue;
+    end;
     path := LocalPathOf(FCfg.Repos[i].LocalName);
     if not DirectoryExists(IncludeTrailingPathDelimiter(path) + '.git') then
     begin
@@ -108,6 +114,15 @@ var
 begin
   for i := 0 to High(FWorkers) do
     FWorkers[i].RequestSync;
+end;
+
+procedure TSyncEngine.SyncRepo(const AName: string);
+var
+  i: Integer;
+begin
+  for i := 0 to High(FWorkers) do
+    if SameText(FWorkers[i].RepoName, AName) then
+      FWorkers[i].RequestSync;
 end;
 
 function TSyncEngine.WorkerCount: Integer;

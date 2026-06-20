@@ -1,8 +1,10 @@
 unit gboxstatus;
 
-{ Status window: a grid of per-repo sync state plus the recent activity log.
-  Reads snapshots from the shared TStatusModel and the global logger; refreshed
-  on a timer (cheap and avoids cross-thread UI updates). }
+{ Status window: a grid of per-repo sync state plus the recent activity log, and
+  per-repo actions (pause/resume, sync now, open folder). Reads snapshots from
+  the shared TStatusModel and the global logger; refreshed on a timer. The
+  actions are surfaced as events the main form wires up (it owns the config and
+  engine). }
 
 {$mode objfpc}{$H+}
 
@@ -13,18 +15,33 @@ uses
   gboxstatusmodel, gboxlog;
 
 type
+  TRepoActionEvent = procedure(const ARepo: string) of object;
+
   TStatusForm = class(TForm)
     grid: TStringGrid;
     mLog: TMemo;
     lblLog: TLabel;
+    btnPause: TButton;
+    btnSync: TButton;
+    btnOpen: TButton;
     refreshTimer: TTimer;
     procedure FormCreate(Sender: TObject);
     procedure refreshTimerTimer(Sender: TObject);
+    procedure btnPauseClick(Sender: TObject);
+    procedure btnSyncClick(Sender: TObject);
+    procedure btnOpenClick(Sender: TObject);
   private
     FStatus: TStatusModel;
+    FOnTogglePause: TRepoActionEvent;
+    FOnSyncRepo: TRepoActionEvent;
+    FOnOpenRepo: TRepoActionEvent;
+    function SelectedRepo: string;
     procedure Refresh;
   public
     procedure Bind(AStatus: TStatusModel);
+    property OnTogglePause: TRepoActionEvent read FOnTogglePause write FOnTogglePause;
+    property OnSyncRepo: TRepoActionEvent read FOnSyncRepo write FOnSyncRepo;
+    property OnOpenRepo: TRepoActionEvent read FOnOpenRepo write FOnOpenRepo;
   end;
 
 var
@@ -47,6 +64,43 @@ procedure TStatusForm.Bind(AStatus: TStatusModel);
 begin
   FStatus := AStatus;
   Refresh;
+end;
+
+function TStatusForm.SelectedRepo: string;
+begin
+  Result := '';
+  if (grid.Row >= 1) and (grid.Row < grid.RowCount) then
+    Result := grid.Cells[0, grid.Row];
+end;
+
+procedure TStatusForm.btnPauseClick(Sender: TObject);
+var
+  r: string;
+begin
+  r := SelectedRepo;
+  if (r <> '') and Assigned(FOnTogglePause) then
+  begin
+    FOnTogglePause(r);
+    Refresh;
+  end;
+end;
+
+procedure TStatusForm.btnSyncClick(Sender: TObject);
+var
+  r: string;
+begin
+  r := SelectedRepo;
+  if (r <> '') and Assigned(FOnSyncRepo) then
+    FOnSyncRepo(r);
+end;
+
+procedure TStatusForm.btnOpenClick(Sender: TObject);
+var
+  r: string;
+begin
+  r := SelectedRepo;
+  if (r <> '') and Assigned(FOnOpenRepo) then
+    FOnOpenRepo(r);
 end;
 
 procedure TStatusForm.Refresh;

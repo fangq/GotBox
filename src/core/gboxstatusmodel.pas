@@ -197,19 +197,23 @@ end;
 
 function TStatusModel.AggregateState: TRepoState;
 var
-  i: Integer;
+  i, total, paused: Integer;
   hasErr, hasConflict, hasSync: Boolean;
 begin
   hasErr := False;
   hasConflict := False;
   hasSync := False;
+  total := 0;
+  paused := 0;
   FLock.Enter;
   try
+    total := Length(FItems);
     for i := 0 to High(FItems) do
       case FItems[i].State of
         rsError: hasErr := True;
         rsConflict: hasConflict := True;
         rsSyncing: hasSync := True;
+        rsPaused: Inc(paused);
       end;
   finally
     FLock.Leave;
@@ -217,6 +221,7 @@ begin
   if hasErr then Result := rsError
   else if hasConflict then Result := rsConflict
   else if hasSync then Result := rsSyncing
+  else if (total > 0) and (paused = total) then Result := rsPaused
   else
     Result := rsSynced;
 end;
