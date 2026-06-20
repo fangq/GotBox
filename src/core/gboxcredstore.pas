@@ -2,15 +2,16 @@ unit gboxcredstore;
 
 { Cross-platform storage for the GitHub Personal Access Token.
 
-  Primary backend is the OS secret store, accessed via its CLI:
+  Per-platform backend:
     Linux  -> secret-tool (libsecret)
     macOS  -> security (Keychain)
-    Windows-> (DPAPI-encrypted file; see note below)
+    Windows-> DPAPI (CryptProtectData) ciphertext in a per-user file
 
-  If the native store is unavailable, falls back to an obfuscated file in the
-  config dir. NOTE: the file fallback is light obfuscation, not strong
-  encryption -- on Windows a DPAPI (CryptProtectData) backend should replace it
-  before release. The token is never written to config.json. }
+  The token blob is stored in a small file in the config dir (user<TAB>base64).
+  On Windows the blob is DPAPI-encrypted to the current user, so only that user
+  on that machine can decrypt it. On platforms without a secret-tool/Keychain
+  CLI, the file falls back to light XOR obfuscation (not strong crypto). The
+  token is never written to config.json. }
 
 {$mode objfpc}{$H+}
 
@@ -109,7 +110,11 @@ begin
   {$IFDEF DARWIN}
   Result := WhichExe('security') <> '';
   {$ELSE}
-  Result := False; // Windows: DPAPI backend TBD; use fallback for now
+  {$IFDEF WINDOWS}
+  Result := True;   // DPAPI is always available
+  {$ELSE}
+  Result := False;
+  {$ENDIF}
   {$ENDIF}
   {$ENDIF}
 end;
@@ -208,6 +213,79 @@ begin
     Result[i] := Chr(Ord(S[i]) xor KEY[(i - 1) mod Length(KEY)]);
 end;
 
+{$IFDEF WINDOWS}
+{ Windows DPAPI. Declared with self-contained types so we don't pull in the
+  Windows unit (which would shadow SysUtils.GetEnvironmentVariable used above). }
+type
+  TDataBlob = record
+    cbData: cardinal;
+    pbData: PByte;
+  end;
+  PDataBlob = ^TDataBlob;
+
+const
+  CRYPTPROTECT_UI_FORBIDDEN = $1;
+  DPAPI_ENTROPY = 'GotBox-DPAPI-v1';   // app-specific entropy
+
+function CryptProtectData(pDataIn: PDataBlob; szDataDescr: PWideChar;
+  pOptionalEntropy: PDataBlob; pvReserved, pPromptStruct: Pointer;
+  dwFlags: cardinal; pDataOut: PDataBlob): LongBool; stdcall;
+  external 'crypt32' name 'CryptProtectData';
+function CryptUnprotectData(pDataIn: PDataBlob; ppszDataDescr: Pointer;
+  pOptionalEntropy: PDataBlob; pvReserved, pPromptStruct: Pointer;
+  dwFlags: cardinal; pDataOut: PDataBlob): LongBool; stdcall;
+  external 'crypt32' name 'CryptUnprotectData';
+function LocalFree(hMem: Pointer): Pointer; stdcall;
+  external 'kernel32' name 'LocalFree';
+
+function DpapiRun(const AData: string; AProtect: Boolean): string;
+var
+  inBlob, outBlob, entBlob: TDataBlob;
+  ent: ansistring;
+  ok: LongBool;
+begin
+  Result := '';
+  ent := DPAPI_ENTROPY;
+  inBlob.cbData := Length(AData);
+  if Length(AData) > 0 then inBlob.pbData := PByte(@AData[1]) else inBlob.pbData := nil;
+  entBlob.cbData := Length(ent);
+  entBlob.pbData := PByte(@ent[1]);
+  FillChar(outBlob, SizeOf(outBlob), 0);
+  if AProtect then
+    ok := CryptProtectData(@inBlob, nil, @entBlob, nil, nil,
+      CRYPTPROTECT_UI_FORBIDDEN, @outBlob)
+  else
+    ok := CryptUnprotectData(@inBlob, nil, @entBlob, nil, nil,
+      CRYPTPROTECT_UI_FORBIDDEN, @outBlob);
+  if ok then
+  begin
+    SetLength(Result, outBlob.cbData);
+    if outBlob.cbData > 0 then Move(outBlob.pbData^, Result[1], outBlob.cbData);
+    LocalFree(outBlob.pbData);
+  end;
+end;
+{$ENDIF}
+
+{ Encrypt/decrypt the token bytes for at-rest storage: DPAPI on Windows,
+  light XOR obfuscation elsewhere. }
+function ProtectData(const S: string): string;
+begin
+  {$IFDEF WINDOWS}
+  Result := DpapiRun(S, True);
+  {$ELSE}
+  Result := XorObfuscate(S);
+  {$ENDIF}
+end;
+
+function UnprotectData(const S: string): string;
+begin
+  {$IFDEF WINDOWS}
+  Result := DpapiRun(S, False);
+  {$ELSE}
+  Result := XorObfuscate(S);
+  {$ENDIF}
+end;
+
 function TCredStore.SaveFallback(const AUser, AToken: string): Boolean;
 var
   f: TStringList;
@@ -216,12 +294,16 @@ begin
   try
     f := TStringList.Create;
     try
-      // store as user<TAB>base64(xor(token))
-      f.Add(AUser + #9 + EncodeStringBase64(XorObfuscate(AToken)));
+      // store as user<TAB>base64(protected(token))
+      f.Add(AUser + #9 + EncodeStringBase64(ProtectData(AToken)));
       f.SaveToFile(FallbackFile);
       Result := True;
       if Assigned(Log) then
-        Log.Warn('cred', 'token saved to obfuscated fallback file (no native store)');
+      {$IFDEF WINDOWS}
+        Log.Info('cred', 'token saved (DPAPI-encrypted file)');
+        {$ELSE}
+        Log.Warn('cred', 'token saved to obfuscated file (no OS secret store)');
+      {$ENDIF}
     finally
       f.Free;
     end;
@@ -252,7 +334,7 @@ begin
       enc := Copy(line, p + 1, MaxInt);
       if SameText(u, AUser) then
       begin
-        AToken := XorObfuscate(DecodeStringBase64(enc));
+        AToken := UnprotectData(DecodeStringBase64(enc));
         Exit(AToken <> '');
       end;
     end;
