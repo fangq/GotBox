@@ -22,4 +22,5 @@ gotbox.res
 /tests/testsync
 /tests/testhistory
 /tests/testremote
+/tests/testsuper
 /tests/lib/

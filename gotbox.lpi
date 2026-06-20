@@ -133,6 +133,11 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="gboxremote"/>
       </Unit>
+      <Unit>
+        <Filename Value="src/core/gboxsuper.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxsuper"/>
+      </Unit>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

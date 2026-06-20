@@ -247,13 +247,14 @@ begin
   // create it
   if ParseSshTarget(url, hostArg, port, path) then
   begin
+    // default branch main so the repo is usable as a submodule upstream
     if port <> '' then
       rc := RunCmd('ssh', ['-p', port, '-oBatchMode=yes',
         '-oStrictHostKeyChecking=accept-new', hostArg, 'git',
-        'init', '--bare', path])
+        'init', '--bare', '-b', 'main', path])
     else
       rc := RunCmd('ssh', ['-oBatchMode=yes', '-oStrictHostKeyChecking=accept-new',
-        hostArg, 'git', 'init', '--bare', path]);
+        hostArg, 'git', 'init', '--bare', '-b', 'main', path]);
     if rc = 0 then Exit(erCreated);
     ADetail := Format('ssh create failed (rc=%d) for %s', [rc, url]);
     Exit(erError);
@@ -264,7 +265,7 @@ begin
   if Copy(localPath, 1, 7) = 'file://' then localPath := Copy(localPath, 8, MaxInt);
   git := TGitRunner.Create('');
   try
-    if git.Git(['init', '--bare', localPath]).Ok then Exit(erCreated);
+    if git.Git(['init', '--bare', '-b', 'main', localPath]).Ok then Exit(erCreated);
   finally
     git.Free;
   end;
