@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # installs FPC + Lazarus (LCL) and puts fpc/lazbuild/fpcres on PATH
+      - name: Install Lazarus + FPC
+        uses: gcarreno/setup-lazarus@v3
+        with:
+          lazarus-version: stable
+
+      - name: Tool versions
+        shell: bash
+        run: |
+          fpc -iV
+          lazbuild --version
+          git --version
+
+      # generated from gotbox.rc so a fresh checkout builds (see Makefile)
+      - name: Generate project resource
+        shell: bash
+        run: fpcres -of res -o gotbox.res gotbox.rc
+
+      # compiles gboxfilewatcher with this OS's native backend
+      # (inotify / ReadDirectoryChangesW / FSEvents)
+      - name: Build GUI app
+        shell: bash
+        run: lazbuild gotbox.lpi
+
+      # builds + runs the console suite; each test is run under a hard timeout
+      - name: Build & run tests
+        shell: bash
+        run: tests/run.sh
+
+  format:
+    name: format check (jcf)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lazarus + FPC
+        uses: gcarreno/setup-lazarus@v3
+        with:
+          lazarus-version: stable
+      # best-effort: JCF is built from the Lazarus component sources, whose path
+      # varies by installer; don't fail the workflow if it can't be located.
+      - name: Build JCF formatter
+        continue-on-error: true
+        run: tools/install-jcf.sh
+      - name: Check formatting
+        continue-on-error: true
+        run: make format-check

@@ -13,6 +13,16 @@ TIMEOUT="${TIMEOUT:-30}"
 OUT=lib
 mkdir -p "$OUT"
 
+# pick a timeout wrapper if available (macOS ships none; coreutils brings gtimeout)
+if command -v timeout >/dev/null 2>&1; then
+  TO="timeout $TIMEOUT"
+elif command -v gtimeout >/dev/null 2>&1; then
+  TO="gtimeout $TIMEOUT"
+else
+  TO=""
+  echo "note: no timeout/gtimeout found; running without a hard per-test cap"
+fi
+
 # fast, watcher-independent tests first; timed/integration tests last
 TESTS="testgit testauth testlink testremote testworker testsync testhistory"
 
@@ -25,8 +35,10 @@ for t in $TESTS; do
     fail=1
     continue
   fi
+  bin="$t"
+  [ -f "$t.exe" ] && bin="$t.exe"   # Windows
   start=$(date +%s)
-  if timeout "$TIMEOUT" "./$t" >"$OUT/$t.run.log" 2>&1; then
+  if $TO "./$bin" >"$OUT/$t.run.log" 2>&1; then
     rc=0
   else
     rc=$?

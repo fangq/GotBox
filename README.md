@@ -1,5 +1,7 @@
 # GotBox
 
+[![CI](https://github.com/fangq/GotBox/actions/workflows/ci.yml/badge.svg)](https://github.com/fangq/GotBox/actions/workflows/ci.yml)
+
 A cross-platform desktop tool (Lazarus/FPC) that gives a Dropbox-like
 "edit locally, auto-sync everywhere" experience, backed by **GitHub private
 repos** instead of a proprietary cloud. Built for a single user working across
