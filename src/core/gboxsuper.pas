@@ -40,6 +40,11 @@ function AddSubmodule(ACfg: TGotConfig;
 { Submodules recorded in <root>/.gitmodules. }
 function ListSubmodules(const ARoot: string): TSubmoduleArray;
 
+{ True if the root folder holds any user content worth syncing -- i.e. any entry
+  other than '.', '..' and '.git'. Used to decide whether to auto-create the
+  .gotbox repo when files/folders appear before any submodule is linked. }
+function RootHasContent(const ARoot: string): Boolean;
+
 implementation
 
 uses
@@ -187,6 +192,27 @@ begin
     end;
   finally
     prov.Free;
+  end;
+end;
+
+function RootHasContent(const ARoot: string): Boolean;
+var
+  sr: TSearchRec;
+begin
+  Result := False;
+  if not DirectoryExists(ARoot) then Exit;
+  if FindFirst(IncludeTrailingPathDelimiter(ARoot) + AllFilesMask,
+    faAnyFile, sr) = 0 then
+  begin
+    try
+      repeat
+        if (sr.Name = '.') or (sr.Name = '..') then Continue;
+        if SameText(sr.Name, '.git') then Continue;
+        Exit(True);   // any other entry counts as content
+      until FindNext(sr) <> 0;
+    finally
+      SysUtils.FindClose(sr);
+    end;
   end;
 end;
 

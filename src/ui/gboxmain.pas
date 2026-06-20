@@ -27,6 +27,8 @@ type
     FEngine: TSyncEngine;
     FLastAgg: TRepoState;
     FIcons: array[TRepoState] of TIcon;
+    FBootstrapTimer: TTimer;
+    procedure BootstrapTick(Sender: TObject);
     procedure BuildTrayMenu;
     procedure BuildIcons;
     procedure FreeIcons;
@@ -86,7 +88,14 @@ begin
   FLastAgg := rsIdle;
   UpdateTrayState;
 
-  StartEngine;   // begin syncing already-linked repos, if any
+  StartEngine;   // begin syncing if the .gotbox root already exists
+
+  // poll the root so .gotbox is auto-created once content appears (and the
+  // backend is configured), without requiring an explicit "Link submodule"
+  FBootstrapTimer := TTimer.Create(Self);
+  FBootstrapTimer.Interval := 5000;
+  FBootstrapTimer.OnTimer := @BootstrapTick;
+  FBootstrapTimer.Enabled := True;
 end;
 
 procedure TMainForm.FormDestroy(Sender: TObject);
@@ -281,6 +290,32 @@ procedure TMainForm.StopEngine;
 begin
   if Assigned(FEngine) then
     FreeAndNil(FEngine);   // TSyncEngine.Destroy stops + joins the workers
+end;
+
+{ Periodic root check: if the backend is configured and the .gotbox root isn't
+  set up yet, auto-create it as soon as real content appears in the root, then
+  start syncing. Once the engine is running there's nothing more to do. }
+procedure TMainForm.BootstrapTick(Sender: TObject);
+var
+  token, err, detail: string;
+begin
+  if Assigned(FEngine) and FEngine.Running then Exit;
+  if not PrepareRemote(token, err) then Exit;   // backend not ready yet; retry later
+
+  if IsGitWorkTree(FConfig.RootDir) then
+  begin
+    StartEngine;   // root already a .gotbox tree (e.g. cloned/linked elsewhere)
+    Exit;
+  end;
+
+  if not RootHasContent(FConfig.RootDir) then Exit;   // nothing to sync yet
+
+  if Assigned(Log) then
+    Log.Info('bootstrap', 'content detected in root; creating .gotbox');
+  if EnsureGotboxRoot(FConfig, token, detail) then
+    StartEngine
+  else if Assigned(Log) then
+    Log.Warn('bootstrap', 'auto-create failed: ' + detail);
 end;
 
 procedure TMainForm.TrayIconDblClick(Sender: TObject);

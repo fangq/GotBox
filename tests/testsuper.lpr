@@ -84,6 +84,17 @@ begin
   cfg.RemoteKind := 'git';            // local/path backend
   cfg.SshBase := ExcludeTrailingPathDelimiter(base);  // repos live at <base>/<name>.git
 
+  // 0) RootHasContent: empty root is empty; a dropped file counts as content
+  Check(not RootHasContent(root), 'empty root has no content');
+  with TStringList.Create do
+  try
+    Add('hi');
+    SaveToFile(IncludeTrailingPathDelimiter(root) + 'loose.txt');
+  finally
+    Free;
+  end;
+  Check(RootHasContent(root), 'root with a file has content');
+
   // 1) ensure the .gotbox root
   Check(EnsureGotboxRoot(cfg, '', detail), 'EnsureGotboxRoot (' + detail + ')');
   Check(DirectoryExists(IncludeTrailingPathDelimiter(root) + '.git'),
