@@ -209,7 +209,7 @@ begin
       end;
     until FindNext(sr) <> 0;
   finally
-    FindClose(sr);
+    SysUtils.FindClose(sr);
   end;
 end;
 
@@ -340,7 +340,7 @@ begin
         AddWatchRecursive(IncludeTrailingPathDelimiter(APath) + sr.Name);
       until FindNext(sr) <> 0;
     finally
-      FindClose(sr);
+      SysUtils.FindClose(sr);
     end;
   end;
 end;
@@ -586,7 +586,7 @@ procedure CFRunLoopStop(rl: CFRunLoopRef); cdecl; external;
 
 var
   { global CoreFoundation constant for the default run-loop mode }
-  kCFRunLoopDefaultMode: CFStringRef; cdecl; external;
+  kCFRunLoopDefaultMode: CFStringRef; cvar; external;
 
 type
   FSEventStreamContext = record
