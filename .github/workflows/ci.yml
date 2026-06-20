@@ -19,11 +19,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # installs FPC + Lazarus (LCL) and puts fpc/lazbuild/fpcres on PATH
       - name: Install Lazarus + FPC
-        uses: gcarreno/setup-lazarus@v3
+        uses: gcarreno/setup-lazarus@v3.4.1
         with:
           lazarus-version: stable
 
@@ -54,9 +54,9 @@ jobs:
     name: format check (jcf)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Lazarus + FPC
-        uses: gcarreno/setup-lazarus@v3
+        uses: gcarreno/setup-lazarus@v3.4.1
         with:
           lazarus-version: stable
       # best-effort: JCF is built from the Lazarus component sources, whose path
