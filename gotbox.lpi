@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CONFIG>
+  <ProjectOptions>
+    <Version Value="12"/>
+    <General>
+      <Flags>
+        <MainUnitHasCreateFormStatements Value="False"/>
+      </Flags>
+      <SessionStorage Value="InProjectDir"/>
+      <Title Value="GotBox"/>
+      <UseAppBundle Value="True"/>
+      <ResourceType Value="res"/>
+    </General>
+    <BuildModes>
+      <Item Name="Default" Default="True"/>
+    </BuildModes>
+    <PublishOptions>
+      <Version Value="2"/>
+      <UseFileFilters Value="True"/>
+    </PublishOptions>
+    <RunParams>
+      <FormatVersion Value="2"/>
+    </RunParams>
+    <RequiredPackages>
+      <Item>
+        <PackageName Value="LCL"/>
+      </Item>
+    </RequiredPackages>
+    <Units>
+      <Unit>
+        <Filename Value="gotbox.lpr"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/ui/gboxmain.pas"/>
+        <IsPartOfProject Value="True"/>
+        <ComponentName Value="MainForm"/>
+        <HasResources Value="True"/>
+        <ResourceBaseClass Value="Form"/>
+        <UnitName Value="gboxmain"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/ui/gboxlogin.pas"/>
+        <IsPartOfProject Value="True"/>
+        <ComponentName Value="LoginForm"/>
+        <HasResources Value="True"/>
+        <ResourceBaseClass Value="Form"/>
+        <UnitName Value="gboxlogin"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/ui/gboxconfig.pas"/>
+        <IsPartOfProject Value="True"/>
+        <ComponentName Value="ConfigForm"/>
+        <HasResources Value="True"/>
+        <ResourceBaseClass Value="Form"/>
+        <UnitName Value="gboxconfig"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/ui/gboxstatus.pas"/>
+        <IsPartOfProject Value="True"/>
+        <ComponentName Value="StatusForm"/>
+        <HasResources Value="True"/>
+        <ResourceBaseClass Value="Form"/>
+        <UnitName Value="gboxstatus"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/core/gboxlog.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxlog"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/core/gboxconfigstore.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxconfigstore"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/core/gboxstatusmodel.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxstatusmodel"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/core/gboxgitrunner.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxgitrunner"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/core/gboxcredstore.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxcredstore"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/core/gboxgithubapi.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxgithubapi"/>
+      </Unit>
+    </Units>
+  </ProjectOptions>
+  <CompilerOptions>
+    <Version Value="11"/>
+    <Target>
+      <Filename Value="gotbox"/>
+    </Target>
+    <SearchPaths>
+      <IncludeFiles Value="src/ui;src/core"/>
+      <OtherUnitFiles Value="src/ui;src/core"/>
+      <UnitOutputDirectory Value="lib/$(TargetCPU)-$(TargetOS)"/>
+    </SearchPaths>
+    <Linking>
+      <Options>
+        <Win32>
+          <GraphicApplication Value="True"/>
+        </Win32>
+      </Options>
+    </Linking>
+  </CompilerOptions>
+</CONFIG>

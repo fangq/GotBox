@@ -1,0 +1,20 @@
+# Lazarus / FPC build artifacts
+lib/
+backup/
+*.o
+*.ppu
+*.compiled
+*.or
+*.dbg
+*.lps
+gotbox
+gotbox.exe
+gotbox.app/
+
+# generated project resource (rebuilt from gotbox.rc by the Makefile)
+gotbox.res
+
+# console test binaries + their build dir
+/tests/testgit
+/tests/testauth
+/tests/lib/

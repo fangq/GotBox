@@ -1,0 +1,24 @@
+#!/bin/sh
+# GotBox pre-commit hook: format staged Pascal sources with JCF so the committed
+# code style stays consistent. Install with: make hooks
+set -e
+
+JCF="${JCF:-$HOME/.local/bin/jcf}"
+CFG="tools/jcfsettings.cfg"
+
+if [ ! -x "$JCF" ]; then
+  echo "gotbox: jcf not found at $JCF -- skipping auto-format (run 'make jcf')." >&2
+  exit 0
+fi
+
+# format each staged Pascal source, then re-stage it
+files=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(pas|pp|lpr|dpr)$' || true)
+[ -z "$files" ] && exit 0
+
+for f in $files; do
+  [ -f "$f" ] || continue
+  "$JCF" -clarify -F -inplace -y -config="$CFG" "$f" >/dev/null 2>&1 || true
+  git add "$f"
+done
+
+exit 0
