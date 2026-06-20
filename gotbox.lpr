@@ -11,7 +11,8 @@ uses
   gboxmain,
   gboxlogin,
   gboxconfig,
-  gboxstatus;
+  gboxstatus,
+  gboxlinksub;
 
   {$R *.res}
 
@@ -26,5 +27,6 @@ begin
   Application.CreateForm(TLoginForm, LoginForm);
   Application.CreateForm(TConfigForm, ConfigForm);
   Application.CreateForm(TStatusForm, StatusForm);
+  Application.CreateForm(TLinkSubForm, LinkSubForm);
   Application.Run;
 end.

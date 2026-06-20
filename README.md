@@ -7,10 +7,16 @@ A cross-platform desktop tool (Lazarus/FPC) that gives a Dropbox-like
 repos** instead of a proprietary cloud. Built for a single user working across
 multiple machines.
 
-You pick one **root directory**; each immediate subfolder maps to one private
-GitHub repo. GotBox watches each subfolder, auto-commits and pushes on-disk
-changes, periodically pulls remote changes, and keeps repos lean by capping
-history and running git maintenance. It lives in the system tray.
+You pick one **root directory**, which becomes the working tree of a single
+private **`.gotbox`** repo. Loose files in the root sync to `.gotbox` itself, and
+you link additional repos as **git submodules** under it (each with a custom
+local name). Use **"Link submodule…"** to either create a new private repo or
+attach an existing one. GotBox watches the root and each submodule, auto-commits
+and pushes on-disk changes, periodically pulls remote changes, and keeps repos
+lean by capping history and running git maintenance. It lives in the system tray.
+
+Submodules use loose pointer tracking (`ignore = all`), so each syncs
+independently and the `.gotbox` superproject isn't churned by their commits.
 
 ## Status
 

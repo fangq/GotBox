@@ -1,0 +1,93 @@
+object LinkSubForm: TLinkSubForm
+  Left = 0
+  Height = 280
+  Top = 0
+  Width = 460
+  BorderStyle = bsDialog
+  Caption = 'GotBox - Link submodule'
+  ClientHeight = 280
+  ClientWidth = 460
+  Position = poScreenCenter
+  LCLVersion = '4.2.0.0'
+  object lblName: TLabel
+    Left = 20
+    Height = 16
+    Top = 18
+    Width = 260
+    Caption = 'Local name (folder under .gotbox)'
+  end
+  object eName: TEdit
+    Left = 20
+    Height = 28
+    Top = 38
+    Width = 420
+    TabOrder = 0
+  end
+  object rbCreate: TRadioButton
+    Left = 20
+    Height = 22
+    Top = 84
+    Width = 280
+    Caption = 'Create a new private repo'
+    Checked = True
+    OnChange = rbModeChange
+    TabOrder = 1
+  end
+  object lblUpstream: TLabel
+    Left = 40
+    Height = 16
+    Top = 112
+    Width = 300
+    Caption = 'New repo name (blank = same as local name)'
+  end
+  object eUpstream: TEdit
+    Left = 40
+    Height = 28
+    Top = 132
+    Width = 400
+    TabOrder = 2
+  end
+  object rbExisting: TRadioButton
+    Left = 20
+    Height = 22
+    Top = 172
+    Width = 280
+    Caption = 'Link an existing repo'
+    OnChange = rbModeChange
+    TabOrder = 3
+  end
+  object lblUrl: TLabel
+    Left = 40
+    Height = 16
+    Top = 200
+    Width = 200
+    Caption = 'Existing repo URL (https or ssh)'
+  end
+  object eUrl: TEdit
+    Left = 40
+    Height = 28
+    Top = 220
+    Width = 400
+    TabOrder = 4
+  end
+  object btnOK: TButton
+    Left = 280
+    Height = 32
+    Top = 240
+    Width = 80
+    Caption = 'Link'
+    Default = True
+    OnClick = btnOKClick
+    TabOrder = 5
+  end
+  object btnCancel: TButton
+    Left = 368
+    Height = 32
+    Top = 240
+    Width = 72
+    Cancel = True
+    Caption = 'Cancel'
+    ModalResult = 2
+    TabOrder = 6
+  end
+end

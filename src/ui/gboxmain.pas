@@ -11,7 +11,7 @@ interface
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Menus, ExtCtrls, Dialogs,
   LCLType, LCLIntf, gboxconfigstore, gboxstatusmodel, gboxlog,
-  gboxcredstore, gboxrepolink, gboxengine;
+  gboxcredstore, gboxengine, gboxsuper;
 
 type
   TMainForm = class(TForm)
@@ -41,7 +41,7 @@ type
     procedure HandleOpenRepo(const ARepo: string);
     // menu handlers
     procedure mnuOpenRoot(Sender: TObject);
-    procedure mnuScanLink(Sender: TObject);
+    procedure mnuLinkSub(Sender: TObject);
     procedure mnuSyncNow(Sender: TObject);
     procedure mnuStatus(Sender: TObject);
     procedure mnuSettings(Sender: TObject);
@@ -60,7 +60,7 @@ implementation
 {$R *.lfm}
 
 uses
-  gboxconfig, gboxlogin, gboxstatus;
+  gboxconfig, gboxlogin, gboxstatus, gboxlinksub;
 
 procedure TMainForm.FormCreate(Sender: TObject);
 begin
@@ -121,7 +121,7 @@ procedure TMainForm.BuildTrayMenu;
 
 begin
   AddItem('Open root folder', @mnuOpenRoot);
-  AddItem('Scan && link folders', @mnuScanLink);
+  AddItem('Link submodule...', @mnuLinkSub);
   AddItem('Sync now', @mnuSyncNow);
   AddSep;
   AddItem('Status...', @mnuStatus);
@@ -265,7 +265,8 @@ var
   token, err: string;
 begin
   StopEngine;
-  if Length(FConfig.Repos) = 0 then Exit;
+  // only run once the .gotbox root has been set up locally
+  if not IsGitWorkTree(FConfig.RootDir) then Exit;
   if not PrepareRemote(token, err) then
   begin
     if Assigned(Log) then Log.Warn('engine', 'sync not started: ' + err);
@@ -295,12 +296,11 @@ begin
     ShowMessage('No root folder configured yet. Open Settings to choose one.');
 end;
 
-procedure TMainForm.mnuScanLink(Sender: TObject);
+procedure TMainForm.mnuLinkSub(Sender: TObject);
 var
-  token, err, msg: string;
-  linker: TRepoLinker;
-  res: TLinkResultArray;
-  i, nOk, nErr: Integer;
+  token, err, detail: string;
+  ok: Boolean;
+  entry: TRepoEntry;
 begin
   if not PrepareRemote(token, err) then
   begin
@@ -308,31 +308,47 @@ begin
     Exit;
   end;
 
-  // Blocking scan (talks to the remote). Acceptable for a manual action.
+  // talks to the remote -- blocking, acceptable for a manual action
   Screen.Cursor := crHourGlass;
   try
-    linker := TRepoLinker.Create(FConfig, token, FStatus);
-    try
-      res := linker.ScanAndLink;
-    finally
-      linker.Free;
-    end;
+    // ensure the .gotbox root exists (create the private repo on first use)
+    if not IsGitWorkTree(FConfig.RootDir) then
+      if not EnsureGotboxRoot(FConfig, token, detail) then
+      begin
+        Screen.Cursor := crDefault;
+        ShowMessage('Could not set up the .gotbox root:' + LineEnding + detail);
+        Exit;
+      end;
   finally
     Screen.Cursor := crDefault;
   end;
 
-  FStore.Save(FConfig);
-  nOk := 0;
-  nErr := 0;
-  for i := 0 to High(res) do
-    if res[i].Action = laError then Inc(nErr)
-    else
-      Inc(nOk);
-  msg := Format('Linked %d folder(s), %d error(s).', [nOk, nErr]);
-  Log.Info('link', msg);
+  if not LinkSubForm.Run then Exit;   // user cancelled
 
-  StartEngine;   // (re)start sync to pick up newly linked repos
-  ShowMessage(msg);
+  Screen.Cursor := crHourGlass;
+  try
+    ok := AddSubmodule(FConfig, token, LinkSubForm.LocalName,
+      LinkSubForm.UpstreamName, LinkSubForm.ExistingUrl,
+      LinkSubForm.CreateUpstream, detail);
+  finally
+    Screen.Cursor := crDefault;
+  end;
+
+  if not ok then
+  begin
+    ShowMessage('Link failed:' + LineEnding + detail);
+    Exit;
+  end;
+
+  // record the new submodule in config (for the per-submodule Paused flag)
+  entry.LocalName := LinkSubForm.LocalName;
+  entry.RemoteUrl := '';
+  entry.Paused := False;
+  FConfig.UpsertRepo(entry);
+  FStore.Save(FConfig);
+
+  StartEngine;   // (re)start sync to pick up the new submodule
+  ShowMessage('Linked submodule "' + LinkSubForm.LocalName + '".');
 end;
 
 procedure TMainForm.mnuSyncNow(Sender: TObject);
@@ -343,7 +359,7 @@ begin
     Log.Info('ui', 'Sync now requested');
   end
   else
-    ShowMessage('Nothing is being synced yet. Use "Scan && link folders" first.');
+    ShowMessage('Nothing is being synced yet. Use "Link submodule..." first.');
 end;
 
 procedure TMainForm.mnuStatus(Sender: TObject);
