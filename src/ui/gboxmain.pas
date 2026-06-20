@@ -11,7 +11,7 @@ interface
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Menus, ExtCtrls, Dialogs,
   LCLType, LCLIntf, gboxconfigstore, gboxstatusmodel, gboxlog,
-  gboxcredstore, gboxengine, gboxsuper;
+  gboxcredstore, gboxengine, gboxsuper, gboxfilewatcher;
 
 type
   TMainForm = class(TForm)
@@ -27,8 +27,11 @@ type
     FEngine: TSyncEngine;
     FLastAgg: TRepoState;
     FIcons: array[TRepoState] of TIcon;
-    FBootstrapTimer: TTimer;
-    procedure BootstrapTick(Sender: TObject);
+    FBootWatcher: TFileWatcher;
+    procedure TryBootstrap;
+    procedure BootWatchChanged(Sender: TObject);
+    procedure StartBootWatch;
+    procedure StopBootWatch;
     procedure BuildTrayMenu;
     procedure BuildIcons;
     procedure FreeIcons;
@@ -89,18 +92,14 @@ begin
   UpdateTrayState;
 
   StartEngine;   // begin syncing if the .gotbox root already exists
-
-  // poll the root so .gotbox is auto-created once content appears (and the
-  // backend is configured), without requiring an explicit "Link submodule"
-  FBootstrapTimer := TTimer.Create(Self);
-  FBootstrapTimer.Interval := 5000;
-  FBootstrapTimer.OnTimer := @BootstrapTick;
-  FBootstrapTimer.Enabled := True;
+  TryBootstrap;  // or auto-create .gotbox if content already sits in the root
+  StartBootWatch; // and watch (via inotify/native) for content appearing later
 end;
 
 procedure TMainForm.FormDestroy(Sender: TObject);
 begin
   if Assigned(Log) then Log.Info('app', 'GotBox stopping');
+  StopBootWatch;
   StopEngine;        // stop worker threads before freeing the status model
   FStatus.Free;
   FConfig.Free;
@@ -292,19 +291,25 @@ begin
     FreeAndNil(FEngine);   // TSyncEngine.Destroy stops + joins the workers
 end;
 
-{ Periodic root check: if the backend is configured and the .gotbox root isn't
-  set up yet, auto-create it as soon as real content appears in the root, then
-  start syncing. Once the engine is running there's nothing more to do. }
-procedure TMainForm.BootstrapTick(Sender: TObject);
+{ Event-driven bootstrap: if the backend is configured and the .gotbox root
+  isn't set up yet, auto-create it as soon as real content appears in the root,
+  then start syncing. Triggered by the native root watcher and by UI actions
+  (account/settings saved) -- no polling. Runs on the main thread. }
+procedure TMainForm.TryBootstrap;
 var
   token, err, detail: string;
 begin
-  if Assigned(FEngine) and FEngine.Running then Exit;
-  if not PrepareRemote(token, err) then Exit;   // backend not ready yet; retry later
+  if Assigned(FEngine) and FEngine.Running then
+  begin
+    StopBootWatch;   // already syncing; the root worker watches from here on
+    Exit;
+  end;
+  if not PrepareRemote(token, err) then Exit;   // backend not ready yet
 
   if IsGitWorkTree(FConfig.RootDir) then
   begin
-    StartEngine;   // root already a .gotbox tree (e.g. cloned/linked elsewhere)
+    StartEngine;     // root already a .gotbox tree (cloned/linked elsewhere)
+    StopBootWatch;
     Exit;
   end;
 
@@ -313,9 +318,37 @@ begin
   if Assigned(Log) then
     Log.Info('bootstrap', 'content detected in root; creating .gotbox');
   if EnsureGotboxRoot(FConfig, token, detail) then
-    StartEngine
+  begin
+    StartEngine;
+    StopBootWatch;
+  end
   else if Assigned(Log) then
     Log.Warn('bootstrap', 'auto-create failed: ' + detail);
+end;
+
+procedure TMainForm.BootWatchChanged(Sender: TObject);
+begin
+  // fired from the watcher thread; marshal the bootstrap onto the GUI thread
+  TThread.Queue(nil, @TryBootstrap);
+end;
+
+procedure TMainForm.StartBootWatch;
+begin
+  StopBootWatch;
+  if (FConfig.RootDir = '') or not DirectoryExists(FConfig.RootDir) then Exit;
+  if IsGitWorkTree(FConfig.RootDir) then Exit;   // already set up; no need
+  FBootWatcher := CreateFileWatcher(FConfig.RootDir, FConfig.IgnoreGlobs);
+  FBootWatcher.OnChanged := @BootWatchChanged;
+  FBootWatcher.Start;
+end;
+
+procedure TMainForm.StopBootWatch;
+begin
+  if Assigned(FBootWatcher) then
+  begin
+    FBootWatcher.Stop;
+    FreeAndNil(FBootWatcher);
+  end;
 end;
 
 procedure TMainForm.TrayIconDblClick(Sender: TObject);
@@ -442,6 +475,9 @@ begin
   begin
     FStore.Save(FConfig);
     Log.Info('ui', 'Settings saved');
+    // root may have changed: re-evaluate bootstrap and (re)arm the watcher
+    TryBootstrap;
+    StartBootWatch;
   end;
 end;
 
@@ -451,6 +487,8 @@ begin
   begin
     FStore.Save(FConfig);
     Log.Info('ui', 'Account updated for user ' + FConfig.GithubUser);
+    // backend just became ready: content already in the root can now bootstrap
+    TryBootstrap;
   end;
 end;
 
