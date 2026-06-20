@@ -61,7 +61,11 @@ jobs:
       - name: Install Lazarus 2.2 + FPC (jammy apt)
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends lazarus
+          # full install (recommends bring the FCL unit packages LCL needs, e.g.
+          # fasthtmlparser); apt's Lazarus ships LCL as source, so lazbuild has
+          # to compile it -- chown the dir so the build user can write there.
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y lazarus
+          sudo chown -R "$(id -u):$(id -g)" /usr/lib/lazarus
           fpc -iV
           lazbuild --version | tail -1
       - name: Generate project resource
