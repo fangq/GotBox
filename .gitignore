@@ -18,4 +18,5 @@ gotbox.res
 /tests/testgit
 /tests/testauth
 /tests/testlink
+/tests/testworker
 /tests/lib/

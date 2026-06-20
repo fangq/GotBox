@@ -98,6 +98,21 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="gboxrepolink"/>
       </Unit>
+      <Unit>
+        <Filename Value="src/core/gboxfilewatcher.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxfilewatcher"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/core/gboxrepoworker.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxrepoworker"/>
+      </Unit>
+      <Unit>
+        <Filename Value="src/core/gboxengine.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxengine"/>
+      </Unit>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

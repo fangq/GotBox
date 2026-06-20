@@ -11,7 +11,7 @@ interface
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Menus, ExtCtrls, Dialogs,
   LCLType, LCLIntf, gboxconfigstore, gboxstatusmodel, gboxlog,
-  gboxcredstore, gboxrepolink;
+  gboxcredstore, gboxrepolink, gboxengine;
 
 type
   TMainForm = class(TForm)
@@ -24,9 +24,12 @@ type
     FConfig: TGotConfig;
     FStore: TConfigStore;
     FStatus: TStatusModel;
+    FEngine: TSyncEngine;
     procedure BuildTrayMenu;
     procedure UpdateTrayState;
     procedure StatusModelChanged;
+    procedure StartEngine;
+    procedure StopEngine;
     // menu handlers
     procedure mnuOpenRoot(Sender: TObject);
     procedure mnuScanLink(Sender: TObject);
@@ -71,11 +74,14 @@ begin
   TrayIcon.Hint := 'GotBox';
   TrayIcon.Visible := True;
   UpdateTrayState;
+
+  StartEngine;   // begin syncing already-linked repos, if any
 end;
 
 procedure TMainForm.FormDestroy(Sender: TObject);
 begin
   if Assigned(Log) then Log.Info('app', 'GotBox stopping');
+  StopEngine;        // stop worker threads before freeing the status model
   FStatus.Free;
   FConfig.Free;
   FStore.Free;
@@ -129,6 +135,37 @@ procedure TMainForm.StatusModelChanged;
 begin
   // Called possibly from worker threads; marshal to the GUI thread.
   TThread.Queue(nil, @UpdateTrayState);
+end;
+
+procedure TMainForm.StartEngine;
+var
+  cred: TCredStore;
+  token: string;
+begin
+  StopEngine;
+  if (FConfig.RootDir = '') or (FConfig.GithubUser = '') or
+    (Length(FConfig.Repos) = 0) then
+    Exit;
+
+  cred := TCredStore.Create;
+  try
+    if not cred.LoadToken(FConfig.GithubUser, token) then
+    begin
+      if Assigned(Log) then Log.Warn('engine', 'no stored token; sync not started');
+      Exit;
+    end;
+  finally
+    cred.Free;
+  end;
+
+  FEngine := TSyncEngine.Create(FConfig, token, FStatus);
+  FEngine.Start;
+end;
+
+procedure TMainForm.StopEngine;
+begin
+  if Assigned(FEngine) then
+    FreeAndNil(FEngine);   // TSyncEngine.Destroy stops + joins the workers
 end;
 
 procedure TMainForm.TrayIconDblClick(Sender: TObject);
@@ -197,14 +234,20 @@ begin
       Inc(nOk);
   msg := Format('Linked %d folder(s), %d error(s).', [nOk, nErr]);
   Log.Info('link', msg);
+
+  StartEngine;   // (re)start sync to pick up newly linked repos
   ShowMessage(msg);
 end;
 
 procedure TMainForm.mnuSyncNow(Sender: TObject);
 begin
-  // M5+: trigger engine sync. For now just a log line.
-  Log.Info('ui', 'Sync now requested');
-  ShowMessage('Sync engine is not wired up yet (milestone 5).');
+  if Assigned(FEngine) and FEngine.Running then
+  begin
+    FEngine.SyncAllNow;
+    Log.Info('ui', 'Sync now requested');
+  end
+  else
+    ShowMessage('Nothing is being synced yet. Use "Scan && link folders" first.');
 end;
 
 procedure TMainForm.mnuStatus(Sender: TObject);
