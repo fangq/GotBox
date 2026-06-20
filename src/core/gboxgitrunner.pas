@@ -61,6 +61,11 @@ type
     function Push(AForce: Boolean = False): TGitResult;
     function Fetch: TGitResult;
     function PullRebase: TGitResult;
+    function Merge(const ARef: string): TGitResult;
+    function CountRange(const ARange: string): Integer; // commits in ARange (-1 err)
+    function ShowStage(AStage: Integer; const APath: string): TGitResult;
+    function CheckoutTheirs(const APath: string): TGitResult;
+    function AddPath(const APath: string): TGitResult;
     function StatusPorcelain: TGitResult;
     function RevParse(const ARef: string): TGitResult;
     function Gc: TGitResult;
@@ -301,6 +306,36 @@ end;
 function TGitRunner.PullRebase: TGitResult;
 begin
   Result := Run(['pull', '--rebase', 'origin']);
+end;
+
+function TGitRunner.Merge(const ARef: string): TGitResult;
+begin
+  Result := Run(['merge', '--no-edit', ARef]);
+end;
+
+function TGitRunner.CountRange(const ARange: string): Integer;
+var
+  r: TGitResult;
+begin
+  r := Run(['rev-list', '--count', ARange]);
+  if r.Ok then Result := StrToIntDef(Trim(r.StdOut), -1)
+  else
+    Result := -1;
+end;
+
+function TGitRunner.ShowStage(AStage: Integer; const APath: string): TGitResult;
+begin
+  Result := Run(['show', Format(':%d:%s', [AStage, APath])]);
+end;
+
+function TGitRunner.CheckoutTheirs(const APath: string): TGitResult;
+begin
+  Result := Run(['checkout', '--theirs', '--', APath]);
+end;
+
+function TGitRunner.AddPath(const APath: string): TGitResult;
+begin
+  Result := Run(['add', '--', APath]);
 end;
 
 function TGitRunner.StatusPorcelain: TGitResult;
