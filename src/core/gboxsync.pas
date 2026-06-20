@@ -64,10 +64,16 @@ const
   never be committed as a (broken) gitlink. This excludes such folders from
   staging and unstages any that slipped in, and -- once a folder is de-embedded
   (its .git removed) -- stops excluding it so its files sync as normal content. }
+function HasGitDir(const APath: string): Boolean;
+begin
+  Result := DirectoryExists(APath + PathDelim + '.git') or
+    FileExists(APath + PathDelim + '.git');
+end;
+
 procedure ReconcileStrayGitlinks(AGit: TGitRunner);
 var
-  root, exclPath, val: string;
-  subm, strays, excl: TStringList;
+  root, exclPath, p, tab: string;
+  subm, tracked, embedded, excl: TStringList;
   sr: TSearchRec;
   r: TGitResult;
   i, a, b, sp: Integer;
@@ -78,15 +84,15 @@ begin
   // working tree has .git as a gitlink FILE -- skip it (and it can't host a
   // .git/info/exclude path anyway).
   if not DirectoryExists(IncludeTrailingPathDelimiter(root) + '.git') then Exit;
-  subm := TStringList.Create;
-  strays := TStringList.Create;
+  subm := TStringList.Create;        // registered submodule paths (legit gitlinks)
+  tracked := TStringList.Create;     // stray gitlinks tracked in the index -> unstage
+  embedded := TStringList.Create;    // folders that still have a .git -> exclude
   excl := TStringList.Create;
   try
-    // registered submodule paths (these ARE legitimate gitlinks)
-    r := AGit.Git(['config', '-f', '.gitmodules', '--get-regexp', '\.path$']);
+    r := AGit.GitQuiet(['config', '-f', '.gitmodules', '--get-regexp', '\.path$']);
     if r.Ok then
     begin
-      excl.Text := r.StdOut;          // reuse excl briefly as a line splitter
+      excl.Text := r.StdOut;
       for i := 0 to excl.Count - 1 do
       begin
         sp := Pos(' ', excl[i]);
@@ -95,7 +101,31 @@ begin
       excl.Clear;
     end;
 
-    // top-level subfolders that are nested git repos but not registered submodules
+    // (A) stray gitlinks already tracked in the index (mode 160000), regardless
+    // of whether the folder still has a .git -- these must be unstaged so the
+    // broken submodule link disappears from .gotbox.
+    r := AGit.GitQuiet(['ls-files', '--stage']);
+    if r.Ok then
+    begin
+      excl.Text := r.StdOut;
+      for i := 0 to excl.Count - 1 do
+        if Copy(excl[i], 1, 6) = '160000' then
+        begin
+          tab := excl[i];
+          sp := Pos(#9, tab);
+          if sp > 0 then
+          begin
+            p := Copy(tab, sp + 1, MaxInt);
+            if subm.IndexOf(p) < 0 then tracked.Add(p);
+          end;
+        end;
+      excl.Clear;
+    end;
+
+    // (B) top-level folders that are nested git repos (still have a .git) and
+    // aren't registered submodules -- exclude them so add -A won't re-add a
+    // gitlink. (A folder with NO .git is de-embedded -> not excluded -> its
+    // files sync as normal content.)
     if FindFirst(IncludeTrailingPathDelimiter(root) + AllFilesMask,
       faDirectory, sr) = 0 then
     begin
@@ -104,17 +134,16 @@ begin
           if (sr.Attr and faDirectory) = 0 then Continue;
           if (sr.Name = '.') or (sr.Name = '..') or SameText(sr.Name, '.git') then
             Continue;
-          val := IncludeTrailingPathDelimiter(root) + sr.Name;
-          if DirectoryExists(val + PathDelim + '.git') or
-            FileExists(val + PathDelim + '.git') then
-            if subm.IndexOf(sr.Name) < 0 then strays.Add(sr.Name);
+          if HasGitDir(IncludeTrailingPathDelimiter(root) + sr.Name) and
+            (subm.IndexOf(sr.Name) < 0) then
+            embedded.Add(sr.Name);
         until FindNext(sr) <> 0;
       finally
         FindClose(sr);
       end;
     end;
 
-    // rewrite the managed block in .git/info/exclude
+    // rewrite the managed block in .git/info/exclude (from still-embedded repos)
     exclPath := IncludeTrailingPathDelimiter(root) + '.git' + PathDelim +
       'info' + PathDelim + 'exclude';
     if FileExists(exclPath) then excl.LoadFromFile(exclPath);
@@ -125,28 +154,34 @@ begin
       if b < a then b := excl.Count - 1;
       for i := b downto a do excl.Delete(i);
     end;
-    if strays.Count > 0 then
+    if embedded.Count > 0 then
     begin
       excl.Add(STRAY_BEGIN);
-      for i := 0 to strays.Count - 1 do excl.Add('/' + strays[i] + '/');
+      for i := 0 to embedded.Count - 1 do excl.Add('/' + embedded[i] + '/');
       excl.Add(STRAY_END);
     end;
     ForceDirectories(ExtractFilePath(exclPath));
     excl.SaveToFile(exclPath);
 
-    // drop any stray that's currently tracked (removes the broken gitlink)
-    for i := 0 to strays.Count - 1 do
-      if AGit.Git(['ls-files', '--error-unmatch', strays[i]]).Ok then
-      begin
-        AGit.Git(['rm', '--cached', '-f', strays[i]]);
-        if Assigned(Log) then
+    // unstage the stray tracked gitlinks (removes the broken link from .gotbox);
+    // a still-embedded one stays out via the exclude, a de-embedded one then has
+    // its files picked up by the normal add -A.
+    for i := 0 to tracked.Count - 1 do
+    begin
+      AGit.Git(['rm', '--cached', '-f', tracked[i]]);
+      if Assigned(Log) then
+        if HasGitDir(IncludeTrailingPathDelimiter(root) + tracked[i]) then
           Log.Warn('sync', Format('"%s" is a nested git repo, not a submodule; ' +
-            'excluded from .gotbox (remove its .git to sync as files, or use Link submodule)',
-            [strays[i]]));
-      end;
+            'excluded (remove its .git to sync as files, or use Link submodule)',
+            [tracked[i]]))
+        else
+          Log.Info('sync', Format('"%s" de-embedded; now syncing as a regular folder',
+            [tracked[i]]));
+    end;
   finally
     subm.Free;
-    strays.Free;
+    tracked.Free;
+    embedded.Free;
     excl.Free;
   end;
 end;
@@ -201,7 +236,7 @@ begin
   end;
 
   // 2. remote branch present?
-  if not AGit.RevParse('origin/main').Ok then
+  if not AGit.GitQuiet(['rev-parse', '--verify', 'origin/main']).Ok then
   begin
     if not CommitLocal then Exit(soError);
     // nothing committed yet (e.g. an empty folder) -> nothing to push
@@ -212,7 +247,7 @@ begin
   end;
 
   // 3. rewritten remote? (no common ancestor between local and remote)
-  if not AGit.Git(['merge-base', 'HEAD', 'origin/main']).Ok then
+  if not AGit.GitQuiet(['merge-base', 'HEAD', 'origin/main']).Ok then
   begin
     hadStash := AGit.HasUncommittedChanges;
     if hadStash then AGit.Stash;

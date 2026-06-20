@@ -146,6 +146,47 @@ begin
   Check(Tracked(root, 'embedded/inner.txt'),
     'de-embedded folder files now tracked as regular content');
 
+  // the github_share case: a gitlink already committed in HEAD whose folder has
+  // NO .git and contains real files -> must be unstaged and its files synced
+  ForceDirectories(IncludeTrailingPathDelimiter(root) + 'pre');
+  with TGitRunner.Create(IncludeTrailingPathDelimiter(root) + 'pre') do
+  try
+    Git(['init', '-b', 'main']);
+    Git(['config', 'user.name', 'p']);
+    Git(['config', 'user.email', 'p@p']);
+  finally
+    Free;
+  end;
+  WriteFile(IncludeTrailingPathDelimiter(root) + 'pre' + PathDelim +
+    'keep.txt', 'keepme');
+  with TGitRunner.Create(IncludeTrailingPathDelimiter(root) + 'pre') do
+  try
+    Git(['add', '-A']);
+    Git(['commit', '-m', 'inner']);
+  finally
+    Free;
+  end;
+  git := TGitRunner.Create(root);   // commit "pre" as a gitlink in .gotbox HEAD
+  try
+    git.Git(['add', 'pre']);
+    git.Git(['commit', '-m', 'add gitlink']);
+  finally
+    git.Free;
+  end;
+  Check(not Tracked(root, 'pre/keep.txt'), 'pre is a gitlink (files not tracked yet)');
+  RmRf(IncludeTrailingPathDelimiter(root) + 'pre' + PathDelim + '.git');  // de-embed
+  conflicts.Clear;
+  git := TGitRunner.Create(root);
+  try
+    git.Git(['config', 'user.name', 'stray']);
+    git.Git(['config', 'user.email', 'stray@test']);
+    RunSyncCycle(git, 'stray', detail, conflicts);
+  finally
+    git.Free;
+  end;
+  Check(Tracked(root, 'pre/keep.txt'),
+    'committed gitlink with no .git is unstaged and its files synced');
+
   cfg.Free;
   WriteLn;
   if failures = 0 then WriteLn('ALL TESTS PASSED')

@@ -29,6 +29,7 @@ type
     FWorkDir: string;
     FAuthUser: string;
     FAuthToken: string;
+    FQuiet: Boolean;   // suppress warn-logging for expected-to-fail probes
     function Run(const AArgs: array of string): TGitResult;
     function EnsureAskPass: string;
   public
@@ -51,6 +52,9 @@ type
 
     // raw passthrough
     function Git(const AArgs: array of string): TGitResult;
+    // like Git but does not log a warning on non-zero exit (for probes whose
+    // failure is expected/normal, e.g. rev-parse/merge-base/--get-regexp)
+    function GitQuiet(const AArgs: array of string): TGitResult;
 
     // common porcelain helpers
     function Version: TGitResult;
@@ -251,7 +255,7 @@ begin
     Result.ExitCode := proc.ExitStatus;
     Result.StdOut := outStream.DataString;
     Result.StdErr := errStream.DataString;
-    if (not Result.Ok) and Assigned(Log) then
+    if (not Result.Ok) and (not FQuiet) and Assigned(Log) then
       Log.Warn('git', Format('exit %d: %s', [Result.ExitCode, Trim(Result.StdErr)]));
   finally
     outStream.Free;
@@ -265,6 +269,16 @@ end;
 function TGitRunner.Git(const AArgs: array of string): TGitResult;
 begin
   Result := Run(AArgs);
+end;
+
+function TGitRunner.GitQuiet(const AArgs: array of string): TGitResult;
+begin
+  FQuiet := True;
+  try
+    Result := Run(AArgs);
+  finally
+    FQuiet := False;
+  end;
 end;
 
 function TGitRunner.Version: TGitResult;
