@@ -20,7 +20,7 @@ unit gboxsync;
 interface
 
 uses
-  Classes, SysUtils, gboxgitrunner, gboxconflict;
+  Classes, SysUtils, gboxgitrunner, gboxconflict, gboxlog;
 
 type
   TSyncOutcome = (soUpToDate, soPushed, soPulled, soMerged, soConflict,
@@ -55,6 +55,102 @@ begin
   Result := Format('%s %s', [AMachine, FormatDateTime('yyyy-mm-dd hh:nn:ss', Now)]);
 end;
 
+const
+  STRAY_BEGIN = '# >>> gotbox: nested repos (not synced - remove .git or use Link) >>>';
+  STRAY_END = '# <<< gotbox <<<';
+
+{ A plain folder in the root is regular content; submodules are only created via
+  the Link dialog. So a nested git repo that ISN'T a registered submodule must
+  never be committed as a (broken) gitlink. This excludes such folders from
+  staging and unstages any that slipped in, and -- once a folder is de-embedded
+  (its .git removed) -- stops excluding it so its files sync as normal content. }
+procedure ReconcileStrayGitlinks(AGit: TGitRunner);
+var
+  root, exclPath, val: string;
+  subm, strays, excl: TStringList;
+  sr: TSearchRec;
+  r: TGitResult;
+  i, a, b, sp: Integer;
+begin
+  root := AGit.WorkDir;
+  if root = '' then Exit;
+  // only the superproject root (a real .git directory) needs this; a submodule
+  // working tree has .git as a gitlink FILE -- skip it (and it can't host a
+  // .git/info/exclude path anyway).
+  if not DirectoryExists(IncludeTrailingPathDelimiter(root) + '.git') then Exit;
+  subm := TStringList.Create;
+  strays := TStringList.Create;
+  excl := TStringList.Create;
+  try
+    // registered submodule paths (these ARE legitimate gitlinks)
+    r := AGit.Git(['config', '-f', '.gitmodules', '--get-regexp', '\.path$']);
+    if r.Ok then
+    begin
+      excl.Text := r.StdOut;          // reuse excl briefly as a line splitter
+      for i := 0 to excl.Count - 1 do
+      begin
+        sp := Pos(' ', excl[i]);
+        if sp > 0 then subm.Add(Trim(Copy(excl[i], sp + 1, MaxInt)));
+      end;
+      excl.Clear;
+    end;
+
+    // top-level subfolders that are nested git repos but not registered submodules
+    if FindFirst(IncludeTrailingPathDelimiter(root) + AllFilesMask,
+      faDirectory, sr) = 0 then
+    begin
+      try
+        repeat
+          if (sr.Attr and faDirectory) = 0 then Continue;
+          if (sr.Name = '.') or (sr.Name = '..') or SameText(sr.Name, '.git') then
+            Continue;
+          val := IncludeTrailingPathDelimiter(root) + sr.Name;
+          if DirectoryExists(val + PathDelim + '.git') or
+            FileExists(val + PathDelim + '.git') then
+            if subm.IndexOf(sr.Name) < 0 then strays.Add(sr.Name);
+        until FindNext(sr) <> 0;
+      finally
+        FindClose(sr);
+      end;
+    end;
+
+    // rewrite the managed block in .git/info/exclude
+    exclPath := IncludeTrailingPathDelimiter(root) + '.git' + PathDelim +
+      'info' + PathDelim + 'exclude';
+    if FileExists(exclPath) then excl.LoadFromFile(exclPath);
+    a := excl.IndexOf(STRAY_BEGIN);
+    if a >= 0 then
+    begin
+      b := excl.IndexOf(STRAY_END);
+      if b < a then b := excl.Count - 1;
+      for i := b downto a do excl.Delete(i);
+    end;
+    if strays.Count > 0 then
+    begin
+      excl.Add(STRAY_BEGIN);
+      for i := 0 to strays.Count - 1 do excl.Add('/' + strays[i] + '/');
+      excl.Add(STRAY_END);
+    end;
+    ForceDirectories(ExtractFilePath(exclPath));
+    excl.SaveToFile(exclPath);
+
+    // drop any stray that's currently tracked (removes the broken gitlink)
+    for i := 0 to strays.Count - 1 do
+      if AGit.Git(['ls-files', '--error-unmatch', strays[i]]).Ok then
+      begin
+        AGit.Git(['rm', '--cached', '-f', strays[i]]);
+        if Assigned(Log) then
+          Log.Warn('sync', Format('"%s" is a nested git repo, not a submodule; ' +
+            'excluded from .gotbox (remove its .git to sync as files, or use Link submodule)',
+            [strays[i]]));
+      end;
+  finally
+    subm.Free;
+    strays.Free;
+    excl.Free;
+  end;
+end;
+
 function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
   out ADetail: string; AConflicts: TStrings): TSyncOutcome;
 var
@@ -83,6 +179,9 @@ var
 
 begin
   ADetail := '';
+
+  // 0. keep stray nested repos out of the commit (no accidental submodules)
+  ReconcileStrayGitlinks(AGit);
 
   // 1. fetch
   r := AGit.Fetch;

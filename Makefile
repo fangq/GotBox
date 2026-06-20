@@ -89,7 +89,7 @@ clean:
 	find . -name '*.o' -o -name '*.ppu' -o -name '*.or' | xargs -r rm -f
 
 distclean: clean
-	rm -f $(BIN) $(BIN).exe tests/testgit tests/testauth tests/testlink tests/testworker tests/testsync tests/testhistory tests/testremote tests/testsuper tests/testengine $(RES)
+	rm -f $(BIN) $(BIN).exe tests/testgit tests/testauth tests/testlink tests/testworker tests/testsync tests/testhistory tests/testremote tests/testsuper tests/teststray tests/testengine $(RES)
 
 help:
 	@sed -n '1,30p' Makefile
