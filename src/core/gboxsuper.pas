@@ -102,21 +102,42 @@ begin
   if Assigned(Log) then Log.Info('super', '.gotbox cloned to ' + ARoot);
 end;
 
+{ True if the remote repo has at least one ref (real commits), vs existing but
+  empty (e.g. just created, or a half-set-up repo). }
+function RemoteHasCommits(AProv: TRemoteProvider; const AName: string): Boolean;
+var
+  git: TGitRunner;
+  r: TGitResult;
+begin
+  git := TGitRunner.Create('');
+  git.AuthUser := AProv.AuthUser;
+  git.AuthToken := AProv.AuthToken;
+  try
+    r := git.Git(['ls-remote', AProv.PushUrl(AName)]);
+    Result := r.Ok and (Trim(r.StdOut) <> '');
+  finally
+    git.Free;
+  end;
+end;
+
 function EnsureGotboxRoot(ACfg: TGotConfig; const AToken: string;
   out ADetail: string): Boolean;
 var
   prov: TRemoteProvider;
   linker: TRepoLinker;
   ens: TEnsureRemote;
+  emptyRoot, remoteEmpty: Boolean;
 begin
   Result := False;
   ADetail := '';
   prov := MakeProvider(ACfg, AToken);
   try
-    // fresh machine: remote .gotbox already exists and the root isn't a repo
-    // yet -- recursively clone it (brings submodules too) rather than init.
-    if (not IsGitWorkTree(ACfg.RootDir)) and (not RootHasContent(ACfg.RootDir)) and
-      prov.RemoteExists(GOTBOX_REPO) then
+    emptyRoot := (not IsGitWorkTree(ACfg.RootDir)) and
+      (not RootHasContent(ACfg.RootDir));
+
+    // fresh machine: remote .gotbox already has content and the root is empty
+    // -- recursively clone it (brings submodules too) rather than init.
+    if emptyRoot and RemoteHasCommits(prov, GOTBOX_REPO) then
     begin
       Result := CloneGotboxRoot(prov, ACfg.RootDir, ACfg.MachineName, ADetail);
       Exit;
@@ -124,12 +145,16 @@ begin
 
     ens := prov.EnsureRemote(GOTBOX_REPO, ADetail);
     if ens = erError then Exit;
+    // push the initial commit when we just created the remote OR it exists but
+    // is still empty (no branch yet -- e.g. a half-created repo)
+    remoteEmpty := not RemoteHasCommits(prov, GOTBOX_REPO);
+
     // reuse the repo-linker's git-side wiring (init + remote + identity +
-    // initial commit + push when newly created)
+    // initial commit + push)
     linker := TRepoLinker.Create(ACfg, AToken);
     try
       Result := linker.EnsureLocalRepo(ACfg.RootDir, prov.PushUrl(GOTBOX_REPO),
-        ens = erCreated, ADetail);
+        (ens = erCreated) or remoteEmpty, ADetail);
     finally
       linker.Free;
     end;

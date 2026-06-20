@@ -81,6 +81,7 @@ var
 begin
   Result := False;
   ADetail := '';
+  ForceDirectories(ALocalPath);   // git init needs the working dir to exist
   git := TGitRunner.Create(ALocalPath);
   try
     git.AuthUser := FProvider.AuthUser;
