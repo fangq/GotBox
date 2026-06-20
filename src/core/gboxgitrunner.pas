@@ -352,7 +352,8 @@ end;
 
 function TGitRunner.Gc: TGitResult;
 begin
-  Result := Run(['gc', '--prune=now', '--aggressive']);
+  // plain (fast) gc; --aggressive is far too slow to run on every maintenance cycle
+  Result := Run(['gc', '--prune=now']);
 end;
 
 function TGitRunner.Stash: TGitResult;
