@@ -12,16 +12,24 @@ history and running git maintenance. It lives in the system tray.
 
 ## Status
 
-Early development. Implemented and tested:
+End-to-end functional, with a console test suite (`make tests`). Implemented:
 
 - **Skeleton** — tray icon + menu, Login/Settings/Status windows, JSON config, logging.
 - **Auth** — OS credential store (libsecret / Keychain / file fallback) + GitHub
   token validation; login window persists the PAT.
-- **Git runner** — async-safe wrapper over the system `git` CLI.
+- **Git runner** — async-safe wrapper over the system `git` CLI, with
+  non-interactive auth via a `GIT_ASKPASS` helper.
+- **Repo linking** — scans the root's subfolders, auto-creates matching private
+  repos via the REST API, wires remotes, and does the initial commit/push.
+- **Sync engine** — one worker thread per repo: a polling file watcher,
+  debounced auto-commit, and a bidirectional cycle (push / fast-forward / merge).
+- **Conflicts** — unmergeable changes keep both versions and raise a tray alert.
+- **History cap** — rolling squash + force-push past the cap, with a
+  rewrite-safe reset so other machines absorb the rewrite losslessly.
 
-Pending: repo linking + auto-create, file watching + auto-commit worker,
-sync/merge/keep-both conflicts, history trimming. See the design notes for the
-full roadmap.
+Possible next steps: native file-watch backends (inotify / ReadDirectoryChangesW
+/ FSEvents) behind the existing watcher interface, file-manager context-menu
+integration, and per-platform packaging/autostart.
 
 ## Design decisions
 
