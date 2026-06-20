@@ -8,7 +8,7 @@ unit gboxconfig;
 interface
 
 uses
-  Classes, SysUtils, Forms, Controls, StdCtrls, Spin, Dialogs,
+  Classes, SysUtils, Forms, Controls, StdCtrls, Spin, Dialogs, gboxmsg,
   gboxconfigstore;
 
 type
@@ -60,8 +60,7 @@ procedure TConfigForm.btnOKClick(Sender: TObject);
 begin
   if (eRoot.Text <> '') and not DirectoryExists(eRoot.Text) then
   begin
-    if MessageDlg('Root folder does not exist. Create it?', mtConfirmation,
-      [mbYes, mbNo], 0) = mrYes then
+    if MsgConfirm('Root folder does not exist. Create it?') then
       ForceDirectories(eRoot.Text)
     else
       Exit;
@@ -83,6 +82,7 @@ begin
   seGc.Value := ACfg.GcEveryNCommits;
   mIgnore.Lines.Assign(ACfg.IgnoreGlobs);
 
+  CenterForm(Self);
   Result := ShowModal = mrOK;
   if not Result then Exit;
 

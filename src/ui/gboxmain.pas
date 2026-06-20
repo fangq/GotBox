@@ -11,7 +11,7 @@ interface
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Menus, ExtCtrls, Dialogs,
   LCLType, LCLIntf, gboxconfigstore, gboxstatusmodel, gboxlog,
-  gboxcredstore, gboxengine, gboxsuper, gboxfilewatcher;
+  gboxcredstore, gboxengine, gboxsuper, gboxfilewatcher, gboxmsg;
 
 type
   TMainForm = class(TForm)
@@ -40,6 +40,7 @@ type
     procedure StartEngine;
     procedure StopEngine;
     procedure MaybePromptLogin;
+    procedure Notify(const ATitle, AMsg: string);
     function PrepareRemote(out AToken, AErr: string): Boolean;
     // status-window actions
     procedure HandleTogglePause(const ARepo: string);
@@ -389,12 +390,20 @@ begin
   mnuStatus(Sender);
 end;
 
+{ Non-blocking informational notice as a tray balloon (bubble by the icon). }
+procedure TMainForm.Notify(const ATitle, AMsg: string);
+begin
+  TrayIcon.BalloonTitle := ATitle;
+  TrayIcon.BalloonHint := AMsg;
+  TrayIcon.ShowBalloonHint;
+end;
+
 procedure TMainForm.mnuOpenRoot(Sender: TObject);
 begin
   if (FConfig.RootDir <> '') and DirectoryExists(FConfig.RootDir) then
     OpenDocument(FConfig.RootDir)
   else
-    ShowMessage('No root folder configured yet. Open Settings to choose one.');
+    Notify('GotBox', 'No root folder configured yet. Open Settings to choose one.');
 end;
 
 procedure TMainForm.mnuLinkSub(Sender: TObject);
@@ -405,7 +414,7 @@ var
 begin
   if not PrepareRemote(token, err) then
   begin
-    ShowMessage(err);
+    MsgError(err);
     Exit;
   end;
 
@@ -417,7 +426,7 @@ begin
       if not EnsureGotboxRoot(FConfig, token, detail) then
       begin
         Screen.Cursor := crDefault;
-        ShowMessage('Could not set up the .gotbox root:' + LineEnding + detail);
+        MsgError('Could not set up the .gotbox root:' + LineEnding + detail);
         Exit;
       end;
   finally
@@ -437,7 +446,7 @@ begin
 
   if not ok then
   begin
-    ShowMessage('Link failed:' + LineEnding + detail);
+    MsgError('Link failed:' + LineEnding + detail);
     Exit;
   end;
 
@@ -449,7 +458,7 @@ begin
   FStore.Save(FConfig);
 
   StartEngine;   // (re)start sync to pick up the new submodule
-  ShowMessage('Linked submodule "' + LinkSubForm.LocalName + '".');
+  Notify('GotBox', 'Linked submodule "' + LinkSubForm.LocalName + '".');
 end;
 
 procedure TMainForm.mnuSyncNow(Sender: TObject);
@@ -460,7 +469,7 @@ begin
     Log.Info('ui', 'Sync now requested');
   end
   else
-    ShowMessage('Nothing is being synced yet. Use "Link submodule..." first.');
+    Notify('GotBox', 'Nothing is being synced yet. Use "Link submodule..." first.');
 end;
 
 procedure TMainForm.mnuStatus(Sender: TObject);
@@ -469,8 +478,10 @@ begin
   StatusForm.OnSyncRepo := @HandleSyncRepo;
   StatusForm.OnOpenRepo := @HandleOpenRepo;
   StatusForm.Bind(FStatus);
+  CenterForm(StatusForm);
   StatusForm.Show;
   StatusForm.BringToFront;
+  StatusForm.SetFocus;
 end;
 
 procedure TMainForm.HandleTogglePause(const ARepo: string);

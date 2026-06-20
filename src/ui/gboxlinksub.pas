@@ -10,7 +10,7 @@ unit gboxlinksub;
 interface
 
 uses
-  Classes, SysUtils, Forms, Controls, StdCtrls, Dialogs;
+  Classes, SysUtils, Forms, Controls, StdCtrls, Dialogs, gboxmsg;
 
 type
   TLinkSubForm = class(TForm)
@@ -61,12 +61,12 @@ procedure TLinkSubForm.btnOKClick(Sender: TObject);
 begin
   if Trim(eName.Text) = '' then
   begin
-    ShowMessage('Enter a local name for the submodule folder.');
+    MsgInfo('Enter a local name for the submodule folder.');
     Exit;
   end;
   if rbExisting.Checked and (Trim(eUrl.Text) = '') then
   begin
-    ShowMessage('Enter the existing repository URL.');
+    MsgInfo('Enter the existing repository URL.');
     Exit;
   end;
   ModalResult := mrOK;
@@ -80,6 +80,7 @@ begin
   rbCreate.Checked := True;
   SyncEnabled;
 
+  CenterForm(Self);
   Result := ShowModal = mrOK;
   if not Result then Exit;
 

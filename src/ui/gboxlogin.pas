@@ -10,7 +10,7 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, StdCtrls, Dialogs, LCLIntf, Graphics,
-  gboxconfigstore, gboxcredstore, gboxgithubapi, gboxlog;
+  gboxconfigstore, gboxcredstore, gboxgithubapi, gboxlog, gboxmsg;
 
 type
   TLoginForm = class(TForm)
@@ -49,7 +49,7 @@ var
 begin
   if Trim(ePat.Text) = '' then
   begin
-    ShowMessage('Please enter a Personal Access Token (scope: repo).');
+    MsgInfo('Please enter a Personal Access Token (scope: repo).');
     Exit;
   end;
 
@@ -61,7 +61,7 @@ begin
     try
       if not api.ValidateToken(login, err) then
       begin
-        ShowMessage('Could not validate token:' + LineEnding + err);
+        MsgError('Could not validate token:' + LineEnding + err);
         Exit;
       end;
     finally
@@ -80,7 +80,7 @@ begin
   cred := TCredStore.Create;
   try
     if not cred.SaveToken(login, FToken) then
-      ShowMessage('Token validated but could not be saved to the credential store.');
+      MsgError('Token validated but could not be saved to the credential store.');
   finally
     cred.Free;
   end;
@@ -99,6 +99,7 @@ begin
   FToken := '';
   eUser.Text := ACfg.GithubUser;
   ePat.Text := '';
+  CenterForm(Self);
   Result := ShowModal = mrOK;
   if Result then
     ACfg.GithubUser := Trim(eUser.Text);

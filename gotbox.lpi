@@ -103,6 +103,11 @@
         <UnitName Value="gboxlinksub"/>
       </Unit>
       <Unit>
+        <Filename Value="src/ui/gboxmsg.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxmsg"/>
+      </Unit>
+      <Unit>
         <Filename Value="src/core/gboxlog.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="gboxlog"/>
