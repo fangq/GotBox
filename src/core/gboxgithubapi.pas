@@ -37,7 +37,15 @@ type
 implementation
 
 uses
-  fphttpclient, opensslsockets, fpjson, jsonparser, gboxlog;
+  fphttpclient,
+  // TLS handler registration: opensslsockets exists on FPC 3.2+; on 3.0.x
+  // (e.g. Ubuntu 20.04 / Lazarus 2.0) fall back to fpopenssl + openssl.
+  {$IF FPC_FULLVERSION >= 30200}
+  opensslsockets,
+  {$ELSE}
+  fpopenssl, openssl,
+  {$ENDIF}
+  fpjson, jsonparser, gboxlog;
 
 const
   API_BASE = 'https://api.github.com';
