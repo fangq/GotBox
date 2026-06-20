@@ -54,24 +54,10 @@ macos: $(RES)
 	$(LAZBUILD) --operating-system=darwin --widgetset=cocoa $(PROJECT)
 
 # ---- tests ----------------------------------------------------------------
-tests: | $(TESTOUT)
-	$(FPC) -Fusrc/core -FU$(TESTOUT) -otests/testgit  tests/testgit.lpr
-	$(FPC) -Fusrc/core -FU$(TESTOUT) -otests/testauth tests/testauth.lpr
-	$(FPC) -Fusrc/core -FU$(TESTOUT) -otests/testlink tests/testlink.lpr
-	$(FPC) -Fusrc/core -FU$(TESTOUT) -otests/testworker tests/testworker.lpr
-	$(FPC) -Fusrc/core -FU$(TESTOUT) -otests/testsync tests/testsync.lpr
-	$(FPC) -Fusrc/core -FU$(TESTOUT) -otests/testhistory tests/testhistory.lpr
-	$(FPC) -Fusrc/core -FU$(TESTOUT) -otests/testremote tests/testremote.lpr
-	tests/testgit
-	tests/testauth
-	tests/testlink
-	tests/testworker
-	tests/testsync
-	tests/testhistory
-	tests/testremote
-
-$(TESTOUT):
-	mkdir -p $(TESTOUT)
+# Each test is built and run under a hard per-test timeout (tests/run.sh) so a
+# hang fails fast instead of blocking. Override with e.g. TIMEOUT=60 make tests.
+tests:
+	FPC="$(FPC)" tests/run.sh
 
 # ---- formatting -----------------------------------------------------------
 format:

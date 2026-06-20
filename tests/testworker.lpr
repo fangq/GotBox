@@ -51,6 +51,7 @@ var
   linker: TRepoLinker;
   worker: TRepoWorker;
   before, after: Integer;
+  deadline: TDateTime;
   f: TStringList;
 begin
   Randomize;
@@ -98,7 +99,7 @@ begin
     300, 0, 0, 0, nil, cfg.IgnoreGlobs);
   try
     worker.Start;
-    Sleep(2500);                       // let the watcher establish a baseline
+    Sleep(500);                        // let the watcher register its inotify watches
 
     f := TStringList.Create;           // make an on-disk change
     try
@@ -109,7 +110,14 @@ begin
       f.Free;
     end;
 
-    Sleep(6000);                       // poll(1500) + debounce(300) + commit/push
+    // wait for the event to propagate, not a fixed duration: poll the remote
+    // until it advances, with a hard deadline so a broken watcher fails fast
+    deadline := Now + EncodeTime(0, 0, 10, 0);   // 10s cap
+    repeat
+      Sleep(150);
+      after := RemoteCommitCount(bareRepo);
+    until (after > before) or (Now > deadline);
+
     worker.Stop;
     worker.WaitFor;
   finally
