@@ -13,6 +13,13 @@ TIMEOUT="${TIMEOUT:-30}"
 OUT=lib
 mkdir -p "$OUT"
 
+# Run hermetically w.r.t. git config: point global/system config at an empty
+# file so tests don't inherit (or depend on) the developer's git identity --
+# this makes local runs match CI and catches "no committer identity" bugs.
+: > "$OUT/empty.gitconfig"
+export GIT_CONFIG_GLOBAL="$PWD/$OUT/empty.gitconfig"
+export GIT_CONFIG_SYSTEM="$PWD/$OUT/empty.gitconfig"
+
 # pick a timeout wrapper if available (macOS ships none; coreutils brings gtimeout)
 if command -v timeout >/dev/null 2>&1; then
   TO="timeout $TIMEOUT"

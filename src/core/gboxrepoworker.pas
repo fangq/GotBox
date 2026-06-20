@@ -22,6 +22,7 @@ type
     FUser: string;
     FToken: string;
     FMachine: string;
+    FCommitter: string;
     FDebounceMs: Integer;
     FGcEvery: Integer;
     FPullIntervalMs: Integer;
@@ -67,6 +68,9 @@ begin
   FUser := AUser;
   FToken := AToken;
   FMachine := AMachine;
+  FCommitter := AUser;
+  if FCommitter = '' then FCommitter := AMachine;
+  if FCommitter = '' then FCommitter := 'gotbox';
   FDebounceMs := ADebounceMs;
   FGcEvery := AGcEvery;
   FPullIntervalMs := APullIntervalSec * 1000;
@@ -127,6 +131,11 @@ begin
   try
     git.AuthUser := FUser;
     git.AuthToken := FToken;
+
+    // ensure a committer identity so commits succeed even with no global git
+    // config (e.g. submodule checkouts, fresh machines, CI runners)
+    git.Git(['config', 'user.name', FCommitter]);
+    git.Git(['config', 'user.email', FCommitter + '@gotbox.local']);
 
     outcome := RunSyncCycle(git, FMachine, detail, conflicts);
 
