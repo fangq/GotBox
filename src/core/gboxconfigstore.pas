@@ -22,7 +22,9 @@ type
   TGotConfig = class
   public
     RootDir: string;
+    RemoteKind: string;         // 'github' (HTTPS+PAT) or 'git' (ssh:// / path)
     GithubUser: string;
+    SshBase: string;            // base for 'git' kind, e.g. ssh://git@host/srv/git
     MachineName: string;
     HistoryCap: Integer;        // 20..50
     CommitDebounceMs: Integer;  // coalesce save bursts
@@ -114,7 +116,9 @@ end;
 procedure TGotConfig.SetDefaults;
 begin
   RootDir := '';
+  RemoteKind := 'github';
   GithubUser := '';
+  SshBase := '';
   MachineName := GetEnvironmentVariable(
     {$IFDEF WINDOWS}
 'COMPUTERNAME'
@@ -191,7 +195,9 @@ begin
       if not (root is TJSONObject) then Exit;
       obj := TJSONObject(root);
       Result.RootDir := obj.Get('rootDir', Result.RootDir);
+      Result.RemoteKind := obj.Get('remoteKind', Result.RemoteKind);
       Result.GithubUser := obj.Get('githubUser', Result.GithubUser);
+      Result.SshBase := obj.Get('sshBase', Result.SshBase);
       Result.MachineName := obj.Get('machineName', Result.MachineName);
       Result.HistoryCap := obj.Get('historyCap', Result.HistoryCap);
       Result.CommitDebounceMs := obj.Get('commitDebounceMs', Result.CommitDebounceMs);
@@ -244,7 +250,9 @@ begin
   obj := TJSONObject.Create;
   try
     obj.Add('rootDir', ACfg.RootDir);
+    obj.Add('remoteKind', ACfg.RemoteKind);
     obj.Add('githubUser', ACfg.GithubUser);
+    obj.Add('sshBase', ACfg.SshBase);
     obj.Add('machineName', ACfg.MachineName);
     obj.Add('historyCap', ACfg.HistoryCap);
     obj.Add('commitDebounceMs', ACfg.CommitDebounceMs);

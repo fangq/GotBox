@@ -1,11 +1,11 @@
 unit gboxrepolink;
 
-{ Maps the local root directory onto GitHub repos. For each immediate subfolder
-  of RootDir it ensures a matching private GitHub repo exists (creating it via
-  the REST API when missing), wires up the local git repo + remote, and records
-  the mapping in the config. Brand-new repos get an initial commit + push;
-  folders whose remote already has history are just linked, leaving the actual
-  reconciliation to the sync engine (milestones 5-6).
+{ Maps the local root directory onto remote repos via a TRemoteProvider (GitHub
+  or a self-maintained git server). For each immediate subfolder of RootDir it
+  ensures the remote repo exists (creating it when possible), wires up the local
+  git repo + remote, and records the mapping in the config. Brand-new repos get
+  an initial commit + push; folders whose remote already has history are just
+  linked, leaving reconciliation to the sync engine.
 
   EnsureLocalRepo (the git-side wiring) takes an explicit remote URL so it can be
   unit-tested against a local bare repo with no network or token. }
@@ -15,7 +15,7 @@ unit gboxrepolink;
 interface
 
 uses
-  Classes, SysUtils, gboxconfigstore, gboxgithubapi, gboxgitrunner, gboxstatusmodel;
+  Classes, SysUtils, gboxconfigstore, gboxgitrunner, gboxstatusmodel, gboxremote;
 
 type
   TLinkAction = (laCreated, laLinked, laError);
@@ -30,21 +30,21 @@ type
   TRepoLinker = class
   private
     FCfg: TGotConfig;
-    FToken: string;
     FStatus: TStatusModel;
-    function RemoteFor(const AName: string; AWithUser: Boolean): string;
+    FProvider: TRemoteProvider;
   public
     constructor Create(ACfg: TGotConfig; const AToken: string;
       AStatus: TStatusModel = nil);
+    destructor Destroy; override;
 
-    { Git-side wiring only (no GitHub calls). Ensures ALocalPath is a git repo
-      with origin = ARemoteUrl, makes an initial commit if there is content and
-      no commit yet, and (when ACreatedRemote) pushes it. Returns False + ADetail
-      on the first failing git step. }
+    { Git-side wiring only (no remote-provider calls). Ensures ALocalPath is a
+      git repo with origin = ARemoteUrl, makes an initial commit if there is
+      content and no commit yet, and (when ACreatedRemote) pushes it. Returns
+      False + ADetail on the first failing git step. }
     function EnsureLocalRepo(const ALocalPath, ARemoteUrl: string;
       ACreatedRemote: Boolean; out ADetail: string): Boolean;
 
-    { Create/link a single subfolder (talks to GitHub). }
+    { Create/link a single subfolder (talks to the remote provider). }
     function LinkFolder(const AName: string; out ARes: TLinkResult): Boolean;
 
     { Scan immediate subfolders of RootDir and link/create each. }
@@ -61,18 +61,14 @@ constructor TRepoLinker.Create(ACfg: TGotConfig; const AToken: string;
 begin
   inherited Create;
   FCfg := ACfg;
-  FToken := AToken;
   FStatus := AStatus;
+  FProvider := MakeProvider(ACfg, AToken);
 end;
 
-function TRepoLinker.RemoteFor(const AName: string; AWithUser: Boolean): string;
+destructor TRepoLinker.Destroy;
 begin
-  if AWithUser then
-    // user embedded in the URL so git only ever asks for the password (token)
-    Result := Format('https://%s@github.com/%s/%s.git',
-      [FCfg.GithubUser, FCfg.GithubUser, AName])
-  else
-    Result := Format('https://github.com/%s/%s.git', [FCfg.GithubUser, AName]);
+  FProvider.Free;
+  inherited Destroy;
 end;
 
 function TRepoLinker.EnsureLocalRepo(const ALocalPath, ARemoteUrl: string;
@@ -81,13 +77,14 @@ var
   git: TGitRunner;
   r: TGitResult;
   isRepo: Boolean;
+  committer: string;
 begin
   Result := False;
   ADetail := '';
   git := TGitRunner.Create(ALocalPath);
   try
-    git.AuthUser := FCfg.GithubUser;
-    git.AuthToken := FToken;
+    git.AuthUser := FProvider.AuthUser;
+    git.AuthToken := FProvider.AuthToken;
 
     isRepo := DirectoryExists(IncludeTrailingPathDelimiter(ALocalPath) + '.git');
     if not isRepo then
@@ -107,14 +104,13 @@ begin
       Exit;
     end;
 
-    // ensure a committer identity so commits succeed without a global git config
-    if FCfg.GithubUser <> '' then
-    begin
-      git.Git(['config', 'user.name', FCfg.GithubUser]);
-      git.Git(['config', 'user.email', FCfg.GithubUser + '@users.noreply.github.com']);
-    end;
+    // committer identity so commits succeed without a global git config
+    committer := FProvider.AuthUser;
+    if committer = '' then committer := FCfg.MachineName;
+    if committer = '' then committer := 'gotbox';
+    git.Git(['config', 'user.name', committer]);
+    git.Git(['config', 'user.email', committer + '@gotbox.local']);
 
-    // make an initial commit if there is content but no commit yet
     if (git.CountCommits <= 0) and git.HasUncommittedChanges then
     begin
       git.AddAll;
@@ -126,7 +122,6 @@ begin
       end;
     end;
 
-    // push only when we just created the (empty) remote and have something local
     if ACreatedRemote and (git.CountCommits > 0) then
     begin
       r := git.Push(False);
@@ -145,9 +140,8 @@ end;
 
 function TRepoLinker.LinkFolder(const AName: string; out ARes: TLinkResult): Boolean;
 var
-  api: TGitHubApi;
-  localPath, cloneUrl, err: string;
-  existed, created: Boolean;
+  localPath, detail: string;
+  ensure: TEnsureRemote;
   entry: TRepoEntry;
 begin
   ARes.LocalName := AName;
@@ -158,43 +152,34 @@ begin
   localPath := IncludeTrailingPathDelimiter(FCfg.RootDir) + AName;
   if Assigned(FStatus) then FStatus.SetState(AName, rsSyncing, 'linking');
 
-  created := False;
-  api := TGitHubApi.Create(FToken);
-  try
-    existed := api.RepoExists(FCfg.GithubUser, AName);
-    if not existed then
-    begin
-      if not api.CreatePrivateRepo(AName, cloneUrl, err) then
-      begin
-        ARes.Detail := 'create failed: ' + err;
-        if Assigned(FStatus) then FStatus.SetState(AName, rsError, ARes.Detail);
-        Exit;
-      end;
-      created := True;
-    end;
-  finally
-    api.Free;
+  ensure := FProvider.EnsureRemote(AName, detail);
+  if ensure = erError then
+  begin
+    ARes.Detail := detail;
+    if Assigned(FStatus) then FStatus.SetState(AName, rsError, detail);
+    Exit;
   end;
 
-  if not EnsureLocalRepo(localPath, RemoteFor(AName, True), created, ARes.Detail) then
+  if not EnsureLocalRepo(localPath, FProvider.PushUrl(AName), ensure =
+    erCreated, ARes.Detail) then
   begin
     if Assigned(FStatus) then FStatus.SetState(AName, rsError, ARes.Detail);
     Exit;
   end;
 
   entry.LocalName := AName;
-  entry.RemoteUrl := RemoteFor(AName, False); // store clean URL (no user/secret)
+  entry.RemoteUrl := FProvider.DisplayUrl(AName);
   entry.Paused := False;
   FCfg.UpsertRepo(entry);
 
-  if created then ARes.Action := laCreated
+  if ensure = erCreated then ARes.Action := laCreated
   else
     ARes.Action := laLinked;
   ARes.Detail := entry.RemoteUrl;
   if Assigned(FStatus) then FStatus.SetState(AName, rsSynced, ARes.Detail);
   if Assigned(Log) then
     Log.Info('link', Format('%s -> %s (%s)', [AName, entry.RemoteUrl,
-      BoolToStr(created, 'created', 'linked')]));
+      BoolToStr(ensure = erCreated, 'created', 'linked')]));
   Result := True;
 end;
 
@@ -210,7 +195,6 @@ begin
 
   names := TStringList.Create;
   try
-    // collect immediate subfolders first (don't link while iterating the FS)
     if FindFirst(IncludeTrailingPathDelimiter(FCfg.RootDir) + AllFilesMask,
       faDirectory, sr) = 0 then
     begin

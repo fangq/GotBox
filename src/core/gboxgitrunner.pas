@@ -213,11 +213,13 @@ begin
       proc.Environment.Add(GetEnvironmentString(i));
     proc.Environment.Values['GIT_TERMINAL_PROMPT'] := '0';
     proc.Environment.Values['LC_ALL'] := 'C';
+    // ssh must never block on a password or an unknown-host prompt (key auth)
+    proc.Environment.Values['GIT_SSH_COMMAND'] :=
+      'ssh -oBatchMode=yes -oStrictHostKeyChecking=accept-new';
     if FAuthToken <> '' then
     begin
       proc.Environment.Values['GIT_ASKPASS'] := EnsureAskPass;
       proc.Environment.Values['GOTBOX_ASKPASS_PW'] := FAuthToken;
-      proc.Environment.Values['GIT_SSH_COMMAND'] := 'ssh -oBatchMode=yes';
     end;
     proc.Options := [poUsePipes, poNoConsole];
 
