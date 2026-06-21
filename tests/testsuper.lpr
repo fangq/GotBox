@@ -118,11 +118,14 @@ begin
   Check(RootHasContent(root), 'root with a file has content');
 
   // 1) ensure the .gotbox root
+  Check(not GotboxRemoteReady(cfg, ''), 'remote .gotbox not ready before create');
   Check(EnsureGotboxRoot(cfg, '', detail), 'EnsureGotboxRoot (' + detail + ')');
   Check(DirectoryExists(IncludeTrailingPathDelimiter(root) + '.git'),
     'root is a git repo');
   Check(DirectoryExists(IncludeTrailingPathDelimiter(base) + '.gotbox.git'),
     '.gotbox bare created');
+  Check(GotboxRemoteReady(cfg, ''),
+    'remote .gotbox ready after create (fresh machine would clone)');
 
   // 2) add a submodule from an existing (seeded) upstream
   MakeSeededBare(IncludeTrailingPathDelimiter(base) + 'ext.git',

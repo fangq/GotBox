@@ -40,6 +40,7 @@ type
     procedure StartEngine;
     procedure StopEngine;
     procedure MaybePromptLogin;
+    procedure StartupTasks(Data: PtrInt);
     procedure Notify(const ATitle, AMsg: string);
     function PrepareRemote(out AToken, AErr: string): Boolean;
     // status-window actions
@@ -85,19 +86,48 @@ begin
   FStatus := TStatusModel.Create;
   FStatus.OnChanged := @StatusModelChanged;
 
-  BuildIcons;
-  BuildTrayMenu;
-  TrayIcon.PopUpMenu := TrayMenu;
-  TrayIcon.Hint := 'GotBox';
-  TrayIcon.Visible := True;
-  FLastAgg := rsIdle;
-  UpdateTrayState;
+  // Tray/icon setup is non-essential: if it fails (e.g. no system tray), log it
+  // but keep the app alive so the rest of startup still runs.
+  try
+    BuildIcons;
+    BuildTrayMenu;
+    TrayIcon.PopUpMenu := TrayMenu;
+    TrayIcon.Hint := 'GotBox';
+    TrayIcon.Visible := True;
+    FLastAgg := rsIdle;
+    UpdateTrayState;
+  except
+    on E: Exception do
+      if Assigned(Log) then Log.Error('app', 'tray init failed: ' + E.Message);
+  end;
 
-  MaybePromptLogin;  // ask for GitHub creds up front if they're missing
+  // Defer first-run prompts + engine start until the message loop is running.
+  // Showing a modal dialog from inside FormCreate (before Application.Run) is
+  // unreliable on gtk2 and can crash; QueueAsyncCall runs this once we're live.
+  Application.QueueAsyncCall(@StartupTasks, 0);
+end;
 
-  StartEngine;   // begin syncing if the .gotbox root already exists
-  TryBootstrap;  // or auto-create .gotbox if content already sits in the root
-  StartBootWatch; // and watch (via inotify/native) for content appearing later
+{ Runs after the message loop starts: prompt for any missing first-run setup
+  (GitHub account, root folder), then bring the sync engine up. Wrapped so a
+  failure is logged instead of taking the whole app down. }
+procedure TMainForm.StartupTasks(Data: PtrInt);
+begin
+  try
+    if Assigned(Log) then Log.Info('app', 'startup: checking configuration');
+    MaybePromptLogin;   // GitHub user + PAT if missing
+
+    // first run: make sure a root folder is chosen
+    if (FConfig.RootDir = '') or not DirectoryExists(FConfig.RootDir) then
+      if ConfigForm.Edit(FConfig) then
+        FStore.Save(FConfig);
+
+    StartEngine;    // begin syncing if the .gotbox root already exists
+    TryBootstrap;   // clone an existing remote, or create from local content
+    StartBootWatch; // watch for content appearing later (event-driven)
+  except
+    on E: Exception do
+      if Assigned(Log) then Log.Error('app', 'startup tasks failed: ' + E.Message);
+  end;
 end;
 
 procedure TMainForm.FormDestroy(Sender: TObject);
@@ -347,17 +377,22 @@ begin
     Exit;
   end;
 
-  if not RootHasContent(FConfig.RootDir) then Exit;   // nothing to sync yet
+  // Set up the root if either: the remote .gotbox already exists (fresh machine
+  // -> clone it, even into an empty root) OR local content exists (first machine
+  // -> create the repo and push). Otherwise wait for content to appear.
+  if not (RootHasContent(FConfig.RootDir) or GotboxRemoteReady(FConfig, token)) then
+    Exit;
 
   if Assigned(Log) then
-    Log.Info('bootstrap', 'content detected in root; creating .gotbox');
+    Log.Info('bootstrap',
+      'setting up .gotbox (clone existing remote or create from local content)');
   if EnsureGotboxRoot(FConfig, token, detail) then
   begin
     StartEngine;
     StopBootWatch;
   end
   else if Assigned(Log) then
-    Log.Warn('bootstrap', 'auto-create failed: ' + detail);
+    Log.Warn('bootstrap', 'setup failed: ' + detail);
 end;
 
 procedure TMainForm.BootWatchChanged(Sender: TObject);

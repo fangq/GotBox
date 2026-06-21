@@ -37,6 +37,10 @@ function AddSubmodule(ACfg: TGotConfig;
   const AToken, ALocalName, AUpstreamName, AExistingUrl: string;
   ACreateUpstream: Boolean; out ADetail: string): Boolean;
 
+{ True if the remote .gotbox repo already exists with content (so a fresh machine
+  should clone it rather than wait for local content to be created). }
+function GotboxRemoteReady(ACfg: TGotConfig; const AToken: string): Boolean;
+
 { Submodules recorded in <root>/.gitmodules. }
 function ListSubmodules(const ARoot: string): TSubmoduleArray;
 
@@ -276,6 +280,19 @@ begin
     finally
       git.Free;
     end;
+  finally
+    prov.Free;
+  end;
+end;
+
+function GotboxRemoteReady(ACfg: TGotConfig; const AToken: string): Boolean;
+var
+  prov: TRemoteProvider;
+begin
+  Result := False;
+  prov := MakeProvider(ACfg, AToken);
+  try
+    Result := RemoteHasCommits(prov, GOTBOX_REPO);
   finally
     prov.Free;
   end;
