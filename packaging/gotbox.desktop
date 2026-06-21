@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=GotBox
+GenericName=Folder Sync
+Comment=Edit locally, auto-sync everywhere via private GitHub repos
+Exec=gotbox
+Icon=gotbox
+Terminal=false
+Categories=Utility;Network;
+Keywords=sync;git;github;backup;
+# helps StatusNotifier/AppIndicator panels resolve the icon by name and map the
+# window to this entry (so a SNI tray shows the GotBox icon, not a generic one)
+StartupWMClass=gotbox
+X-GNOME-Autostart-enabled=true

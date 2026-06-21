@@ -11,6 +11,10 @@
 #   make jcf        - build+install the JCF formatter into ~/.local/bin
 #   make clean      - remove build artifacts
 #   make distclean  - also remove binaries
+#   make icon       - (re)generate assets/gotbox.ico from tools/make-icon.py
+#   make install    - install binary + .desktop + hicolor icons (PREFIX=~/.local)
+#   make uninstall  - remove the installed files
+#   make autostart  - start GotBox on login (drops a .desktop in ~/.config/autostart)
 #
 # Cross-compile targets (need a matching cross-FPC + LCL for the target):
 #   make win64 | win32 | linux | macos
@@ -19,22 +23,30 @@ LAZBUILD ?= lazbuild
 FPC      ?= fpc
 FPCRES   ?= fpcres
 JCF      ?= $(HOME)/.local/bin/jcf
+PREFIX   ?= $(HOME)/.local
 
 PROJECT  := gotbox.lpi
 BIN      := gotbox
 JCFCFG   := tools/jcfsettings.cfg
 RES      := gotbox.res
+ICON     := assets/gotbox.ico
 TESTOUT  := tests/lib
+ICONSIZES := 16 22 24 32 48 64 128 256
 
 PASSRC   := $(shell find src -name '*.pas')
 
 .PHONY: all build debug release tests format format-check clean distclean \
-        run hooks jcf linux win64 win32 macos help
+        run hooks jcf icon install uninstall autostart linux win64 win32 macos help
 
 all: build
 
-# the project resource is generated from the .rc/.manifest so a fresh clone builds
-$(RES): gotbox.rc gotbox.manifest
+# the application icon (regenerated only if the generator script changes)
+$(ICON): tools/make-icon.py
+	python3 tools/make-icon.py
+icon: $(ICON)
+
+# the project resource is generated from the .rc/.manifest/icon so a fresh clone builds
+$(RES): gotbox.rc gotbox.manifest $(ICON)
 	$(FPCRES) -of res -o $(RES) gotbox.rc
 
 # default build is the optimized, stripped Release mode (~3.6 MB vs ~30 MB debug)
@@ -83,6 +95,34 @@ hooks:
 
 run: build
 	./$(BIN)
+
+# ---- desktop integration (Linux) ------------------------------------------
+# Install the binary, a .desktop entry, and the hicolor icons so the app shows
+# up in the menu with the GotBox icon and StatusNotifier panels resolve it by
+# name (Icon=gotbox) instead of a generic fallback. PREFIX defaults to ~/.local.
+install: build icon
+	install -Dm755 $(BIN) $(PREFIX)/bin/$(BIN)
+	install -Dm644 packaging/gotbox.desktop $(PREFIX)/share/applications/gotbox.desktop
+	@for s in $(ICONSIZES); do \
+	  install -Dm644 assets/icons/$${s}x$${s}/gotbox.png \
+	    $(PREFIX)/share/icons/hicolor/$${s}x$${s}/apps/gotbox.png; \
+	done
+	-update-desktop-database $(PREFIX)/share/applications 2>/dev/null || true
+	-gtk-update-icon-cache -f -t $(PREFIX)/share/icons/hicolor 2>/dev/null || true
+	@echo "installed to $(PREFIX) (ensure $(PREFIX)/bin is on PATH)"
+
+uninstall:
+	rm -f $(PREFIX)/bin/$(BIN) $(PREFIX)/share/applications/gotbox.desktop
+	@for s in $(ICONSIZES); do \
+	  rm -f $(PREFIX)/share/icons/hicolor/$${s}x$${s}/apps/gotbox.png; \
+	done
+	-update-desktop-database $(PREFIX)/share/applications 2>/dev/null || true
+	@echo "uninstalled from $(PREFIX)"
+
+# launch GotBox automatically on login
+autostart: install
+	install -Dm644 packaging/gotbox.desktop $(HOME)/.config/autostart/gotbox.desktop
+	@echo "GotBox will start on login (remove $(HOME)/.config/autostart/gotbox.desktop to disable)"
 
 clean:
 	rm -rf lib $(TESTOUT) backup
