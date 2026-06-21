@@ -40,12 +40,20 @@ var
           full := IncludeTrailingPathDelimiter(ADir) + sr.Name;
           if (sr.Attr and faDirectory) <> 0 then RmRf(full)
           else
+          begin
+            {$IFDEF WINDOWS}
+            FileSetAttr(full, faNormal);   // git pack/object files are read-only on Windows
+            {$ENDIF}
             DeleteFile(full);
+          end;
         until FindNext(sr) <> 0;
       finally
         FindClose(sr);
       end;
     end;
+    {$IFDEF WINDOWS}
+    FileSetAttr(ADir, faNormal);
+    {$ENDIF}
     RemoveDir(ADir);
   end;
 
