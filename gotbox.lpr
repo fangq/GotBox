@@ -16,6 +16,7 @@ uses
   {$ENDIF}
   gboxconfigstore,
   gboxdaemon,
+  gboxmsg,
   gboxmain,
   gboxlogin,
   gboxconfig,
@@ -80,40 +81,6 @@ begin
 end;
   {$ENDIF}
 
- { Manual HiDPI override. Application.Scaled honours the monitor PPI that the
-  widgetset reports, but gtk2 does not pick up some desktop scale settings (e.g.
-  xfce's "window scaling"), leaving the app tiny on HiDPI screens. Setting
-  GOTBOX_SCALE (or GDK_SCALE) to e.g. 2 scales every form explicitly. }
-  procedure ApplyManualScale;
-  var
-    s: string;
-    fs: TFormatSettings;
-    factor: Double;
-    i: Integer;
-    f: TCustomForm;
-  begin
-    s := GetEnvironmentVariable('GOTBOX_SCALE');
-    if s = '' then
-      s := GetEnvironmentVariable('GDK_SCALE');
-    if s = '' then
-      Exit;
-    fs := DefaultFormatSettings;
-    fs.DecimalSeparator := '.';
-    factor := StrToFloatDef(StringReplace(s, ',', '.', []), 1.0, fs);
-    if factor <= 1.0 then
-      Exit;
-    for i := 0 to Screen.CustomFormCount - 1 do
-    begin
-      f := Screen.CustomForms[i];
-      try
-        f.AutoAdjustLayout(lapAutoAdjustForDPI, 96, Round(96 * factor),
-          f.Width, Round(f.Width * factor));
-      except
-        // never let cosmetic scaling abort startup
-      end;
-    end;
-  end;
-
 begin
   if WantHelp then
   begin
@@ -137,7 +104,15 @@ begin
 
   RequireDerivedFormResource := True;
   Application.Title := 'GotBox';
+  {$IFDEF LINUX}
+  // gtk2 caps Application.Scaled at the Xft DPI and reverts manual bumps on
+  // Show, so it can't honour xfce's integer window-scaling factor. Leave LCL
+  // auto-scaling off and scale forms ourselves (ApplyAdaptiveScale, below).
+  Application.Scaled := False;
+  {$ELSE}
+  // Windows/macOS report true (per-monitor) DPI; LCL scaling is correct here.
   Application.Scaled := True;
+  {$ENDIF}
   Application.Initialize;
   // tray-only app: never show the hidden main (tray-host) form
   Application.ShowMainForm := False;
@@ -146,6 +121,6 @@ begin
   Application.CreateForm(TConfigForm, ConfigForm);
   Application.CreateForm(TStatusForm, StatusForm);
   Application.CreateForm(TLinkSubForm, LinkSubForm);
-  ApplyManualScale;
+  ApplyAdaptiveScale;   // scale existing forms to the target DPI (Linux/gtk2)
   Application.Run;
 end.
