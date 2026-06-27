@@ -1,6 +1,10 @@
 # Lazarus / FPC build artifacts
 lib/
 backup/
+
+# installer staging + output (see .github/workflows/package.yml)
+dist/
+build/
 *.o
 *.ppu
 *.compiled

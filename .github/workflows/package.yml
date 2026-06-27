@@ -1,0 +1,239 @@
+name: Package
+
+# Builds the desktop installers and uploads them as workflow artifacts:
+#   Linux   -> .deb         (binary UPX-compressed)
+#   Windows -> Inno Setup .exe (binary UPX-compressed)
+#   macOS   -> .dmg         (no UPX: it breaks code signing / modern macOS)
+# Runs on main and on version tags; also on demand. Tag pushes (v*) additionally
+# attach the installers to a GitHub Release.
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+# needed for the tag-only "attach to release" steps (softprops/action-gh-release)
+permissions:
+  contents: write
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------------ Linux .deb
+  linux-deb:
+    name: linux (.deb)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Lazarus + FPC
+        uses: gcarreno/setup-lazarus@v3.4.1
+        with:
+          lazarus-version: stable
+
+      - name: Install UPX
+        run: sudo apt-get update && sudo apt-get install -y upx-ucl
+
+      - name: Generate project resource
+        run: fpcres -of res -o gotbox.res gotbox.rc
+
+      - name: Build GUI app (Release)
+        run: lazbuild --build-mode=Release gotbox.lpi
+
+      - name: Compute version
+        run: |
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            ver="${GITHUB_REF#refs/tags/v}"
+          else
+            ver="1.0.0~git$(git rev-parse --short HEAD)"
+          fi
+          echo "VERSION=$ver" >> "$GITHUB_ENV"
+          echo "building version $ver"
+
+      - name: Compress binary (UPX)
+        run: |
+          upx --best --lzma gotbox
+          upx -t gotbox
+
+      - name: Build .deb
+        run: |
+          set -eu
+          arch=amd64
+          pkg="build/deb/gotbox_${VERSION}_${arch}"
+          rm -rf "$pkg"
+          mkdir -p "$pkg/DEBIAN" "$pkg/usr/bin" \
+                   "$pkg/usr/share/applications" "$pkg/etc/xdg/autostart" \
+                   "$pkg/usr/share/doc/gotbox"
+          install -m 0755 gotbox "$pkg/usr/bin/gotbox"
+          install -m 0644 packaging/linux/gotbox.desktop \
+                  "$pkg/usr/share/applications/gotbox.desktop"
+          install -m 0644 packaging/linux/gotbox-autostart.desktop \
+                  "$pkg/etc/xdg/autostart/gotbox.desktop"
+          install -m 0644 README.md "$pkg/usr/share/doc/gotbox/README.md"
+          # control: fields at column 0, Description continuation lines prefixed
+          # with a single space (built with echo so YAML indentation can't corrupt it)
+          {
+            echo "Package: gotbox"
+            echo "Version: ${VERSION}"
+            echo "Section: utils"
+            echo "Priority: optional"
+            echo "Architecture: ${arch}"
+            echo "Depends: git, libgtk2.0-0, libx11-6, libc6"
+            echo "Recommends: libsecret-tools"
+            echo "Maintainer: Qianqian Fang <q.fang@northeastern.edu>"
+            echo "Homepage: https://github.com/fangq/GotBox"
+            echo "Description: Dropbox-like file sync over GitHub private repos"
+            echo " GotBox gives an edit-locally, auto-sync-everywhere experience"
+            echo " backed by GitHub private repos instead of a proprietary cloud."
+            echo " It watches a root folder, auto-commits and pushes changes,"
+            echo " periodically pulls remote changes, and lives in the system tray."
+          } > "$pkg/DEBIAN/control"
+          mkdir -p dist
+          dpkg-deb --build --root-owner-group "$pkg" \
+                   "dist/gotbox_${VERSION}_${arch}.deb"
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gotbox-linux-deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+      - name: Attach to release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.deb
+
+  # -------------------------------------------------------------- Windows (Inno)
+  windows-inno:
+    name: windows (Inno Setup .exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Lazarus + FPC
+        uses: gcarreno/setup-lazarus@v3.4.1
+        with:
+          lazarus-version: stable
+
+      - name: Generate project resource
+        shell: bash
+        run: fpcres -of res -o gotbox.res gotbox.rc
+
+      - name: Build GUI app (Release)
+        shell: bash
+        run: lazbuild --build-mode=Release gotbox.lpi
+
+      - name: Compute version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            ver="${GITHUB_REF#refs/tags/v}"
+          else
+            ver="1.0.0~git$(git rev-parse --short HEAD)"
+          fi
+          echo "VERSION=$ver" >> "$GITHUB_ENV"
+          echo "building version $ver"
+
+      - name: Install UPX + Inno Setup
+        shell: pwsh
+        run: |
+          choco install upx innosetup -y --no-progress
+
+      - name: Compress binary (UPX)
+        shell: pwsh
+        run: |
+          upx --best --lzma gotbox.exe
+          upx -t gotbox.exe
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=$env:VERSION" "/DSrcDir=$($PWD.Path)" `
+                  "packaging\windows\gotbox.iss"
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gotbox-windows-setup
+          path: dist/*.exe
+          if-no-files-found: error
+
+      - name: Attach to release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+
+  # -------------------------------------------------------------------- macOS dmg
+  macos-dmg:
+    name: macos (.dmg)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Lazarus + FPC
+        uses: gcarreno/setup-lazarus@v3.4.1
+        with:
+          lazarus-version: stable
+
+      - name: Generate project resource
+        run: fpcres -of res -o gotbox.res gotbox.rc
+
+      - name: Build GUI app (Release)
+        run: lazbuild --build-mode=Release gotbox.lpi
+
+      - name: Compute version
+        run: |
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            ver="${GITHUB_REF#refs/tags/v}"
+          else
+            ver="1.0.0~git$(git rev-parse --short HEAD)"
+          fi
+          echo "VERSION=$ver" >> "$GITHUB_ENV"
+          echo "building version $ver"
+
+      - name: Build .app bundle + .dmg
+        run: |
+          set -eu
+          # lazbuild may place the binary inside the bundle or at the repo root
+          if [ -x gotbox.app/Contents/MacOS/gotbox ]; then
+            bin=gotbox.app/Contents/MacOS/gotbox
+          elif [ -x gotbox ]; then
+            bin=gotbox
+          else
+            echo "no gotbox binary produced"; exit 1
+          fi
+
+          stage="$(mktemp -d)"
+          app="$stage/GotBox.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp "$bin" "$app/Contents/MacOS/gotbox"
+          chmod +x "$app/Contents/MacOS/gotbox"
+          sed "s/__VERSION__/${VERSION}/g" packaging/macos/Info.plist \
+              > "$app/Contents/Info.plist"
+
+          # drag-to-install layout
+          ln -s /Applications "$stage/Applications"
+
+          mkdir -p dist
+          hdiutil create -volname "GotBox" -srcfolder "$stage" \
+                  -ov -format UDZO "dist/GotBox-${VERSION}.dmg"
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gotbox-macos-dmg
+          path: dist/*.dmg
+          if-no-files-found: error
+
+      - name: Attach to release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg
