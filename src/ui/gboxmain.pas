@@ -116,7 +116,10 @@ begin
     if Assigned(Log) then Log.Info('app', 'startup: checking configuration');
     MaybePromptLogin;   // GitHub user + PAT if missing
 
-    // first run: make sure a root folder is chosen
+    // First run: the root defaults to $HOME/GotBox -- create it so the app works
+    // out of the box. Only prompt if it's blank or can't be created.
+    if FConfig.RootDir <> '' then
+      ForceDirectories(FConfig.RootDir);
     if (FConfig.RootDir = '') or not DirectoryExists(FConfig.RootDir) then
       if ConfigForm.Edit(FConfig) then
         FStore.Save(FConfig);

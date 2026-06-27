@@ -10,6 +10,7 @@ uses
   Forms,
   Controls,
   SysUtils,
+  gboxdaemon,
   gboxmain,
   gboxlogin,
   gboxconfig,
@@ -53,6 +54,16 @@ uses
   end;
 
 begin
+  if WantHelp then
+  begin
+    writeln(UsageText);
+    Halt(0);
+  end;
+  // Detach into the background before the widgetset/threads come up (no-op
+  // without -d, and on Windows). Forking later would be unsafe.
+  if WantDaemon then
+    Daemonize;
+
   RequireDerivedFormResource := True;
   Application.Title := 'GotBox';
   Application.Scaled := True;

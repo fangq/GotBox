@@ -113,6 +113,11 @@
         <UnitName Value="gboxlog"/>
       </Unit>
       <Unit>
+        <Filename Value="src/core/gboxdaemon.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxdaemon"/>
+      </Unit>
+      <Unit>
         <Filename Value="src/core/gboxconfigstore.pas"/>
         <IsPartOfProject Value="True"/>
         <UnitName Value="gboxconfigstore"/>
