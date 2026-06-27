@@ -26,6 +26,7 @@ type
     FStatus: TStatusModel;
     FEngine: TSyncEngine;
     FLastAgg: TRepoState;
+    FTrayShown: Boolean;   // has the tray icon been set at least once?
     FIcons: array[TRepoState] of TIcon;
     FBootWatcher: TFileWatcher;
     procedure TryBootstrap;
@@ -176,17 +177,19 @@ end;
 procedure TMainForm.BuildIcons;
 
   function MakeDot(AColor: TColor): TIcon;
+  const
+    SZ = 24;   // AppIndicator/SNI panels render at ~22-24px; 16 looked blurry
   var
     bmp: TBitmap;
   begin
     bmp := TBitmap.Create;
     try
-      bmp.SetSize(16, 16);
+      bmp.SetSize(SZ, SZ);
       bmp.Canvas.Brush.Color := AColor;
-      bmp.Canvas.FillRect(0, 0, 16, 16);
+      bmp.Canvas.FillRect(0, 0, SZ, SZ);
       bmp.Canvas.Brush.Style := bsClear;
       bmp.Canvas.Pen.Color := clBlack;
-      bmp.Canvas.Rectangle(0, 0, 16, 16);
+      bmp.Canvas.Rectangle(0, 0, SZ, SZ);
       Result := TIcon.Create;
       Result.Assign(bmp);
     finally
@@ -216,6 +219,15 @@ var
   agg: TRepoState;
 begin
   agg := FStatus.AggregateState;
+
+  // Only touch the tray icon when the aggregate state actually changes. The
+  // LCL gtk2 AppIndicator backend writes a NEW temp PNG with a new icon name on
+  // every Icon assignment; reassigning on each status-model change churns the
+  // name so fast that StatusNotifier panels (ayatana) give up and show a generic
+  // fallback icon. Updating only on real change keeps the icon name stable.
+  if FTrayShown and (agg = FLastAgg) then
+    Exit;
+
   case agg of
     rsError: TrayIcon.Hint := 'GotBox - error';
     rsConflict: TrayIcon.Hint := 'GotBox - conflict';
@@ -242,6 +254,7 @@ begin
       Notify('GotBox - sync error', 'A repo could not sync. Open Status for details.');
   end;
   FLastAgg := agg;
+  FTrayShown := True;
 end;
 
 procedure TMainForm.StatusModelChanged;
