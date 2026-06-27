@@ -17,7 +17,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # Pin macOS to 14 (Sonoma): setup-lazarus' prebuilt Lazarus .pkg installs
+        # there, but the newer macos-latest (now macOS 15 / Sequoia) installer
+        # rejects it as "incompatible with this version of macOS". macos-14 is the
+        # image these jobs last passed on, before GitHub rolled macos-latest fwd.
+        os: [ubuntu-latest, windows-latest, macos-14]
     steps:
       - uses: actions/checkout@v5
 

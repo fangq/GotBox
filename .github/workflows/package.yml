@@ -173,7 +173,10 @@ jobs:
   # -------------------------------------------------------------------- macOS dmg
   macos-dmg:
     name: macos (.dmg)
-    runs-on: macos-latest
+    # Pin to macOS 14 (Sonoma): setup-lazarus' .pkg installs there, but the newer
+    # macos-latest (macOS 15 / Sequoia) rejects it as "incompatible with this
+    # version of macOS". macos-14 is the last image this job passed on.
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v5
 
