@@ -1,0 +1,50 @@
+name: Install Lazarus + FPC (macOS)
+description: >
+  Install FPC, FPC sources and the Lazarus IDE from the official SourceForge
+  macOS packages (the x86-64 .dmg/.pkg downloads), instead of gcarreno/setup-
+  lazarus -- whose bundled FPC .mpkg is rejected ("incompatible with this
+  version of macOS") on the newest runner images. Use on an Intel runner
+  (macos-*-intel); produces an x86_64 toolchain.
+
+inputs:
+  lazarus-version:
+    description: Lazarus release under "Lazarus macOS x86-64" to install.
+    default: "3.6"
+  fpc-dmg:
+    description: FPC compiler .dmg filename in that release folder.
+    default: "fpc-3.2.2.intelarm64-macosx.dmg"
+  fpcsrc-dmg:
+    description: FPC sources .dmg filename in that release folder.
+    default: "fpc-src-3.2.2-20210709-macosx.dmg"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euxo pipefail
+        ver="${{ inputs.lazarus-version }}"
+        base="https://downloads.sourceforge.net/project/lazarus/Lazarus%20macOS%20x86-64/Lazarus%20${ver}"
+
+        cd "$RUNNER_TEMP"
+        curl -fL --retry 3 -o fpc.dmg     "${base}/${{ inputs.fpc-dmg }}"
+        curl -fL --retry 3 -o fpcsrc.dmg  "${base}/${{ inputs.fpcsrc-dmg }}"
+        curl -fL --retry 3 -o lazarus.pkg "${base}/Lazarus-${ver}-macosx-x86_64.pkg"
+
+        # mount a .dmg, install the .pkg/.mpkg it contains, then unmount
+        install_from_dmg() {
+          local dmg="$1" mnt pkg
+          mnt=$(hdiutil attach -nobrowse "$dmg" | grep -Eo '/Volumes/.*' | tail -1)
+          pkg=$(find "$mnt" -maxdepth 2 \( -iname '*.mpkg' -o -iname '*.pkg' \) | head -1)
+          echo "installing $pkg"
+          sudo installer -pkg "$pkg" -target /
+          hdiutil detach "$mnt" >/dev/null
+        }
+        install_from_dmg fpc.dmg
+        install_from_dmg fpcsrc.dmg
+        sudo installer -pkg lazarus.pkg -target /
+
+        # lazbuild lives in the app folder; fpc lands in /usr/local/bin (on PATH)
+        echo "/Applications/Lazarus" >> "$GITHUB_PATH"
+        /usr/local/bin/fpc -iV
+        /Applications/Lazarus/lazbuild --version | tail -1

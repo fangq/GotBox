@@ -173,14 +173,17 @@ jobs:
   # -------------------------------------------------------------------- macOS dmg
   macos-dmg:
     name: macos (.dmg)
-    runs-on: macos-latest
+    # Intel runner: the official FPC 3.2.2 macOS packages are x86_64 and their
+    # installers cap the supported macOS version, so they fail on the newest
+    # arm64 images (macOS 26, June 2026). macos-15-intel installs them cleanly
+    # and yields an x86_64 .app (runs on Apple Silicon via Rosetta).
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Lazarus + FPC
-        uses: gcarreno/setup-lazarus@v3.4.1
-        with:
-          lazarus-version: stable
+      # install from the official SourceForge .dmg/.pkg downloads
+      - name: Install Lazarus + FPC (macOS)
+        uses: ./.github/actions/install-lazarus-macos
 
       - name: Generate project resource
         run: fpcres -of res -o gotbox.res gotbox.rc
