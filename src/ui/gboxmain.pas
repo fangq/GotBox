@@ -33,6 +33,10 @@ type
     // the System record type, so name it from SyncObjs explicitly
     FNoteLock: SyncObjs.TCriticalSection;   // queue of pending notices (worker->GUI)
     FNotes: TStringList;                     // each line: title <TAB> body
+    {$IFDEF LINUX}
+    FScaleTimer: TTimer;                     // polls desktop scale for live HiDPI refresh
+    procedure ScaleTick(Sender: TObject);
+    {$ENDIF}
     procedure TryBootstrap;
     procedure BootWatchChanged(Sender: TObject);
     procedure StartBootWatch;
@@ -113,11 +117,29 @@ begin
       if Assigned(Log) then Log.Error('app', 'tray init failed: ' + E.Message);
   end;
 
+  {$IFDEF LINUX}
+  // Live HiDPI refresh: gtk2 never tells us when the desktop scale changes, so
+  // poll it and re-scale open windows when it does (no restart needed).
+  FScaleTimer := TTimer.Create(Self);
+  FScaleTimer.Interval := 3000;
+  FScaleTimer.OnTimer := @ScaleTick;
+  FScaleTimer.Enabled := True;
+  {$ENDIF}
+
   // Defer first-run prompts + engine start until the message loop is running.
   // Showing a modal dialog from inside FormCreate (before Application.Run) is
   // unreliable on gtk2 and can crash; QueueAsyncCall runs this once we're live.
   Application.QueueAsyncCall(@StartupTasks, 0);
 end;
+
+{$IFDEF LINUX}
+procedure TMainForm.ScaleTick(Sender: TObject);
+begin
+  // RefreshScale recomputes the target DPI and re-scales every form if it moved
+  if RefreshScale and Assigned(Log) then
+    Log.Info('ui', 'UI rescaled to desktop DPI change');
+end;
+{$ENDIF}
 
 { Runs after the message loop starts: prompt for any missing first-run setup
   (GitHub account, root folder), then bring the sync engine up. Wrapped so a
@@ -148,6 +170,9 @@ end;
 procedure TMainForm.FormDestroy(Sender: TObject);
 begin
   if Assigned(Log) then Log.Info('app', 'GotBox stopping');
+  {$IFDEF LINUX}
+  if Assigned(FScaleTimer) then FScaleTimer.Enabled := False;
+  {$ENDIF}
   StopBootWatch;
   StopEngine;        // stop worker threads before freeing the status model
   FStatus.Free;

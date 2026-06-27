@@ -27,8 +27,13 @@ function DesktopNotify(const ATitle, AMsg: string): Boolean;
   target. Each is a no-op when the target equals the form's current PPI (e.g.
   Windows/macOS, where Application.Scaled already scaled it). }
 procedure ScaleFormUp(AForm: TCustomForm);
-{ Apply ScaleFormUp to every form that currently exists; call once at startup. }
+{ Scale every form that currently exists to the desktop's target DPI; call once
+  at startup (after the forms are created). }
 procedure ApplyAdaptiveScale;
+{ Re-read the desktop scale and, if it changed, re-scale every open form (and
+  re-center the visible ones). Call periodically (e.g. from a timer) for live
+  response to desktop scaling changes. Returns True if a change was applied. }
+function RefreshScale: Boolean;
 
 { Center AForm on the primary monitor work area (call before Show/ShowModal). }
 procedure CenterForm(AForm: TCustomForm);
@@ -109,19 +114,19 @@ end;
 {$ENDIF}
 
 var
-  GTargetPPI: Integer = -1;   // cached target DPI (computed once)
+  GAppliedPPI: Integer = 0;   // the PPI all forms are currently scaled to
 
-{ The DPI we want forms scaled to: an explicit GOTBOX_SCALE/GDK_SCALE override,
-  else the larger of the widgetset's reported DPI and WindowScalingFactor*96. }
-function TargetPPI: Integer;
+{ The DPI we want forms scaled to right now: an explicit GOTBOX_SCALE/GDK_SCALE
+  override (a factor vs 96), else the widgetset's reported DPI multiplied by the
+  desktop integer window-scaling factor. Recomputed on every call (no caching)
+  so live refresh picks up changes. }
+function DesiredPPI: Integer;
 var
   s: string;
   fs: TFormatSettings;
   factor: Double;
   wsf: Integer;
 begin
-  if GTargetPPI >= 0 then Exit(GTargetPPI);
-
   // explicit override: GOTBOX_SCALE / GDK_SCALE as a factor relative to 96
   s := GetEnvironmentVariable('GOTBOX_SCALE');
   if s = '' then
@@ -132,52 +137,81 @@ begin
     fs.DecimalSeparator := '.';
     factor := StrToFloatDef(StringReplace(s, ',', '.', []), 0, fs);
     if factor > 0 then
-    begin
-      GTargetPPI := Round(96 * factor);
-      Exit(GTargetPPI);
-    end;
+      Exit(Round(96 * factor));
   end;
 
-  // baseline: the DPI the widgetset reports (Xft.dpi on gtk2). gtk2 already
-  // renders fonts at this DPI, but the forms are designed at 96, so scaling to
-  // just this leaves fonts lagging the geometry.
-  GTargetPPI := Screen.PixelsPerInch;
-  // Multiply by the desktop's integer window-scaling factor so geometry AND
-  // fonts scale uniformly and match other apps (gtk3 renders at
-  // WindowScalingFactor * Xft.dpi); gtk2 ignores the factor, so we apply it.
+  // baseline: the DPI the widgetset reports (Xft.dpi on gtk2). gtk2 renders
+  // fonts at this DPI but designs forms at 96, so scaling to just this leaves
+  // fonts lagging the geometry; multiply by the desktop's integer window-
+  // scaling factor so geometry AND fonts scale uniformly and match other apps
+  // (gtk3 renders at WindowScalingFactor * Xft.dpi).
+  Result := Screen.PixelsPerInch;
   wsf := DesktopWindowScalingFactor;
   if wsf >= 2 then
-    GTargetPPI := GTargetPPI * wsf;
-  Result := GTargetPPI;
+    Result := Result * wsf;
+end;
+
+{ Scale one form from its current PPI to ATargetPPI (handles either direction). }
+procedure ScaleFormTo(AForm: TCustomForm; ATargetPPI: Integer);
+var
+  cur: Integer;
+begin
+  if (AForm = nil) or (ATargetPPI <= 0) then
+    Exit;
+  cur := AForm.PixelsPerInch;
+  if cur <= 0 then
+    cur := 96;
+  if ATargetPPI <> cur then
+    AForm.AutoAdjustLayout(lapAutoAdjustForDPI, cur, ATargetPPI,
+      AForm.Width, Round(AForm.Width * ATargetPPI / cur));
 end;
 
 procedure ScaleFormUp(AForm: TCustomForm);
 var
-  tgt, cur: Integer;
+  tgt: Integer;
 begin
-  if AForm = nil then
-    Exit;
-  tgt := TargetPPI;
-  cur := AForm.PixelsPerInch;
-  if cur <= 0 then
-    cur := 96;
-  if tgt > cur then
-    AForm.AutoAdjustLayout(lapAutoAdjustForDPI, cur, tgt,
-      AForm.Width, Round(AForm.Width * tgt / cur));
+  tgt := GAppliedPPI;       // match whatever the open windows are at
+  if tgt <= 0 then
+    tgt := DesiredPPI;
+  ScaleFormTo(AForm, tgt);
+end;
+
+{ Scale every existing form to ATargetPPI, re-centering the visible ones, and
+  record it as the applied target. }
+procedure ApplyScaleAll(ATargetPPI: Integer);
+var
+  i: Integer;
+  f: TCustomForm;
+begin
+  for i := 0 to Screen.CustomFormCount - 1 do
+  begin
+    f := Screen.CustomForms[i];
+    try
+      ScaleFormTo(f, ATargetPPI);
+      // keep an open window centered after it changes size (skip the hidden
+      // tray-host main form)
+      if f.Visible and (f <> Application.MainForm) then
+        CenterForm(f);
+    except
+      // never let cosmetic scaling crash the app
+    end;
+  end;
+  GAppliedPPI := ATargetPPI;
 end;
 
 procedure ApplyAdaptiveScale;
-var
-  i: Integer;
 begin
-  if TargetPPI <= 96 then
-    Exit;
-  for i := 0 to Screen.CustomFormCount - 1 do
-    try
-      ScaleFormUp(Screen.CustomForms[i]);
-    except
-      // never let cosmetic scaling abort startup
-    end;
+  ApplyScaleAll(DesiredPPI);
+end;
+
+function RefreshScale: Boolean;
+var
+  d: Integer;
+begin
+  d := DesiredPPI;
+  Result := (d > 0) and (d <> GAppliedPPI);
+  if Result then
+    ApplyScaleAll(d);
 end;
 
 procedure CenterForm(AForm: TCustomForm);
