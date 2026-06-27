@@ -8,3 +8,4 @@ Icon=gotbox
 Terminal=false
 Categories=Utility;Network;FileTransfer;
 Keywords=sync;git;github;backup;dropbox;
+StartupWMClass=gotbox

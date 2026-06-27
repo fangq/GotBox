@@ -102,7 +102,7 @@ run: build
 # name (Icon=gotbox) instead of a generic fallback. PREFIX defaults to ~/.local.
 install: build icon
 	install -Dm755 $(BIN) $(PREFIX)/bin/$(BIN)
-	install -Dm644 packaging/gotbox.desktop $(PREFIX)/share/applications/gotbox.desktop
+	install -Dm644 packaging/linux/gotbox.desktop $(PREFIX)/share/applications/gotbox.desktop
 	@for s in $(ICONSIZES); do \
 	  install -Dm644 assets/icons/$${s}x$${s}/gotbox.png \
 	    $(PREFIX)/share/icons/hicolor/$${s}x$${s}/apps/gotbox.png; \
@@ -119,9 +119,9 @@ uninstall:
 	-update-desktop-database $(PREFIX)/share/applications 2>/dev/null || true
 	@echo "uninstalled from $(PREFIX)"
 
-# launch GotBox automatically on login
+# launch GotBox in the background on login (Exec=gotbox -d)
 autostart: install
-	install -Dm644 packaging/gotbox.desktop $(HOME)/.config/autostart/gotbox.desktop
+	install -Dm644 packaging/linux/gotbox-autostart.desktop $(HOME)/.config/autostart/gotbox.desktop
 	@echo "GotBox will start on login (remove $(HOME)/.config/autostart/gotbox.desktop to disable)"
 
 clean:

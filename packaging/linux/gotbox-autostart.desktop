@@ -7,3 +7,4 @@ Icon=gotbox
 Terminal=false
 Categories=Utility;Network;
 X-GNOME-Autostart-enabled=true
+StartupWMClass=gotbox
