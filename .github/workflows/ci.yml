@@ -17,25 +17,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-15-intel (not macos-latest/arm64): the official FPC 3.2.2 macOS
-        # packages are x86_64 and their installers cap the supported macOS
-        # version, so they fail on the newest arm64 images. An Intel runner with
-        # an in-range OS installs them cleanly.
-        os: [ubuntu-latest, windows-latest, macos-15-intel]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v5
 
-      # Linux/Windows: action installs FPC + Lazarus (LCL) and puts the tools on PATH
+      # installs FPC + Lazarus (LCL) and puts fpc/lazbuild/fpcres on PATH
       - name: Install Lazarus + FPC
-        if: runner.os != 'macOS'
         uses: gcarreno/setup-lazarus@v3.4.1
         with:
           lazarus-version: stable
-
-      # macOS: install from the official SourceForge .dmg/.pkg downloads instead
-      - name: Install Lazarus + FPC (macOS)
-        if: runner.os == 'macOS'
-        uses: ./.github/actions/install-lazarus-macos
 
       - name: Tool versions
         shell: bash
