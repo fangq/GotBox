@@ -61,6 +61,37 @@ make release    # optimized build
 make win64      # cross-compile (needs a matching cross-FPC + LCL)
 ```
 
+## Running
+
+```sh
+gotbox            # start (lives in the system tray)
+gotbox -d         # daemon mode: detach from the terminal, run in the background
+gotbox --help     # list options
+```
+
+On first run the sync root defaults to `$HOME/GotBox` (`%USERPROFILE%\GotBox` on
+Windows), created automatically; change it any time in **Settings**. Daemon mode
+(`-d`/`--daemon`, Unix/macOS) forks into the background so the launching shell
+returns and the app survives the terminal closing — the tray icon and first-run
+dialogs still appear. On Windows the GUI app is already console-detached, so the
+flag is a no-op.
+
+## Installers
+
+The **Package** workflow (`.github/workflows/package.yml`) builds installers on
+each push to `main` and on `v*` tags, uploading them as artifacts (and attaching
+them to a GitHub Release for tags):
+
+- **Linux** — `.deb` (binary UPX-compressed); ships a desktop entry plus an
+  `/etc/xdg/autostart` entry that launches `gotbox -d` at login.
+- **Windows** — Inno Setup `.exe` (binary UPX-compressed); per-user install with
+  an optional daemon-mode autostart shortcut.
+- **macOS** — `.dmg` with a drag-to-`Applications` `GotBox.app` (no UPX — it
+  breaks code signing and modern macOS loaders). The app is unsigned, so
+  first launch needs right-click → Open.
+
+Packaging templates live under `packaging/` (`linux/`, `windows/`, `macos/`).
+
 ## Formatting
 
 GotBox uses **JCF** (JEDI Code Format) as its canonical Pascal formatter,

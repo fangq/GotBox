@@ -54,6 +54,9 @@ type
 function GotConfigDir: string;
 { Returns the per-user data directory (logs, etc.). }
 function GotDataDir: string;
+{ Default sync root used until the user picks one ($HOME/GotBox, or
+  %USERPROFILE%\GotBox on Windows). Not created here -- just the path. }
+function DefaultRootDir: string;
 
 implementation
 
@@ -97,6 +100,15 @@ begin
   ForceDirectories(Result);
 end;
 
+function DefaultRootDir: string;
+begin
+  {$IFDEF WINDOWS}
+  Result := IncludeTrailingPathDelimiter(GetEnvironmentVariable('USERPROFILE')) + 'GotBox';
+  {$ELSE}
+  Result := IncludeTrailingPathDelimiter(GetEnvironmentVariable('HOME')) + 'GotBox';
+  {$ENDIF}
+end;
+
 { ---- TGotConfig ---- }
 
 constructor TGotConfig.Create;
@@ -114,7 +126,7 @@ end;
 
 procedure TGotConfig.SetDefaults;
 begin
-  RootDir := '';
+  RootDir := DefaultRootDir;
   RemoteKind := 'github';
   GithubUser := '';
   SshBase := '';

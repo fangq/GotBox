@@ -15,6 +15,7 @@ uses
   BaseUnix,
   {$ENDIF}
   gboxconfigstore,
+  gboxdaemon,
   gboxmain,
   gboxlogin,
   gboxconfig,
@@ -114,13 +115,26 @@ end;
   end;
 
 begin
+  if WantHelp then
+  begin
+    writeln(UsageText);
+    Halt(0);
+  end;
+  // Detach into the background before the widgetset/threads come up (no-op
+  // without -d, and on Windows). Forking later would be unsafe.
+  if WantDaemon then
+    Daemonize;
+
   {$IFDEF UNIX}
+  // single-instance guard -- after any daemon fork, so the pidfile records the
+  // persistent (child) process, not a parent that exits right after forking
   if AlreadyRunning then
   begin
     WriteLn('GotBox is already running.');
     Halt(0);
   end;
   {$ENDIF}
+
   RequireDerivedFormResource := True;
   Application.Title := 'GotBox';
   Application.Scaled := True;
