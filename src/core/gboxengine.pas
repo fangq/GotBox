@@ -24,6 +24,7 @@ type
     FStatus: TStatusModel;
     FWorkers: array of TRepoWorker;
     FRunning: Boolean;
+    FOnNotice: TSyncNoticeEvent;
     function LocalPathOf(const AName: string): string;
     procedure SpawnWorker(const AName, APath: string; AExtraIgnore: TStrings);
   public
@@ -35,6 +36,9 @@ type
     procedure SyncRepo(const AName: string);
     property Running: Boolean read FRunning;
     function WorkerCount: Integer;
+    { Fired (on a worker thread) when a cycle synced files; handler must marshal
+      to the GUI. Set before Start so spawned workers pick it up. }
+    property OnNotice: TSyncNoticeEvent read FOnNotice write FOnNotice;
   end;
 
 implementation
@@ -75,6 +79,7 @@ begin
     w := TRepoWorker.Create(AName, APath, FCfg.GithubUser, FToken,
       FCfg.MachineName, FCfg.CommitDebounceMs, FCfg.GcEveryNCommits,
       FCfg.PullIntervalSec, FCfg.HistoryCap, FStatus, ignore);
+    w.OnNotice := FOnNotice;
   finally
     ignore.Free;
   end;

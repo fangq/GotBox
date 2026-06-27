@@ -29,9 +29,13 @@ type
 function SyncOutcomeText(AOutcome: TSyncOutcome): string;
 
 { Runs one cycle on AGit's repo. Conflict copy paths (if any) are appended to
-  AConflicts. ADetail carries an error/explanation string. }
+  AConflicts. ADetail carries an error/explanation string. When AChanged is
+  given, the files added/modified this cycle (local commits + pulled changes)
+  are appended to it (deduplicated, repo-relative). }
 function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
-  out ADetail: string; AConflicts: TStrings): TSyncOutcome;
+  out ADetail: string; AConflicts: TStrings): TSyncOutcome; overload;
+function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
+  out ADetail: string; AConflicts, AChanged: TStrings): TSyncOutcome; overload;
 
 implementation
 
@@ -188,10 +192,40 @@ end;
 
 function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
   out ADetail: string; AConflicts: TStrings): TSyncOutcome;
+begin
+  Result := RunSyncCycle(AGit, AMachine, ADetail, AConflicts, nil);
+end;
+
+function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
+  out ADetail: string; AConflicts, AChanged: TStrings): TSyncOutcome;
 var
   r, mr: TGitResult;
   behind, ahead: Integer;
   hadStash: Boolean;
+
+// append name-only output of a git command to AChanged (deduplicated)
+  procedure Collect(const AArgs: array of string);
+  var
+    rr: TGitResult;
+    sl: TStringList;
+    k: Integer;
+    ln: string;
+  begin
+    if AChanged = nil then Exit;
+    rr := AGit.GitQuiet(AArgs);
+    if not rr.Ok then Exit;
+    sl := TStringList.Create;
+    try
+      sl.Text := rr.StdOut;
+      for k := 0 to sl.Count - 1 do
+      begin
+        ln := Trim(sl[k]);
+        if (ln <> '') and (AChanged.IndexOf(ln) < 0) then AChanged.Add(ln);
+      end;
+    finally
+      sl.Free;
+    end;
+  end;
 
   function CommitLocal: Boolean;
   begin
@@ -199,6 +233,7 @@ var
     if AGit.HasUncommittedChanges then
     begin
       AGit.AddAll;
+      Collect(['diff', '--cached', '--name-only']);   // local edits being synced
       r := AGit.CommitAll(CommitMsg(AMachine));
       Result := r.Ok;
       if not Result then ADetail := 'commit failed: ' + Trim(r.StdErr);
@@ -249,6 +284,7 @@ begin
   // 3. rewritten remote? (no common ancestor between local and remote)
   if not AGit.GitQuiet(['merge-base', 'HEAD', 'origin/main']).Ok then
   begin
+    Collect(['diff', '--name-only', 'HEAD', 'origin/main']);   // incoming changes
     hadStash := AGit.HasUncommittedChanges;
     if hadStash then AGit.Stash;
     AGit.ResetHard('origin/main');
@@ -289,6 +325,9 @@ begin
     else
       Exit(soError);
   end;
+
+  // behind > 0: remote has changes we're about to pull in -- record them
+  Collect(['diff', '--name-only', 'HEAD', 'origin/main']);
 
   // behind > 0
   if ahead = 0 then

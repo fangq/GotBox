@@ -32,6 +32,8 @@ type
     procedure Error(const AScope, AMsg: string);
     { Returns a snapshot copy of recent log lines (caller frees). }
     function Snapshot: TStringList;
+    { Path of the on-disk log file (for "Export log"). }
+    property Path: string read FPath;
   end;
 
 var

@@ -9,8 +9,8 @@ unit gboxmain;
 interface
 
 uses
-  Classes, SysUtils, Forms, Controls, Graphics, Menus, ExtCtrls, Dialogs,
-  LCLType, LCLIntf, gboxconfigstore, gboxstatusmodel, gboxlog,
+  Classes, SysUtils, SyncObjs, Forms, Controls, Graphics, Menus, ExtCtrls,
+  Dialogs, LCLType, LCLIntf, gboxconfigstore, gboxstatusmodel, gboxlog,
   gboxcredstore, gboxengine, gboxsuper, gboxfilewatcher, gboxmsg;
 
 type
@@ -29,6 +29,10 @@ type
     FTrayShown: Boolean;   // has the tray icon been set at least once?
     FIcons: array[TRepoState] of TIcon;
     FBootWatcher: TFileWatcher;
+    // qualified: an LCL unit in the uses clause shadows TCriticalSection with
+    // the System record type, so name it from SyncObjs explicitly
+    FNoteLock: SyncObjs.TCriticalSection;   // queue of pending notices (worker->GUI)
+    FNotes: TStringList;                     // each line: title <TAB> body
     procedure TryBootstrap;
     procedure BootWatchChanged(Sender: TObject);
     procedure StartBootWatch;
@@ -43,6 +47,8 @@ type
     procedure MaybePromptLogin;
     procedure StartupTasks(Data: PtrInt);
     procedure Notify(const ATitle, AMsg: string);
+    procedure HandleSyncNotice(const ATitle, ABody: string);
+    procedure DrainNotices;
     function PrepareRemote(out AToken, AErr: string): Boolean;
     // status-window actions
     procedure HandleTogglePause(const ARepo: string);
@@ -55,6 +61,8 @@ type
     procedure mnuStatus(Sender: TObject);
     procedure mnuSettings(Sender: TObject);
     procedure mnuAccount(Sender: TObject);
+    procedure mnuExportLog(Sender: TObject);
+    procedure mnuAbout(Sender: TObject);
     procedure mnuQuit(Sender: TObject);
   public
     property Config: TGotConfig read FConfig;
@@ -86,6 +94,9 @@ begin
 
   FStatus := TStatusModel.Create;
   FStatus.OnChanged := @StatusModelChanged;
+
+  FNoteLock := SyncObjs.TCriticalSection.Create;
+  FNotes := TStringList.Create;
 
   // Tray/icon setup is non-essential: if it fails (e.g. no system tray), log it
   // but keep the app alive so the rest of startup still runs.
@@ -143,6 +154,8 @@ begin
   FConfig.Free;
   FStore.Free;
   FreeIcons;
+  FNotes.Free;
+  FNoteLock.Free;
   DoneLogger;
 end;
 
@@ -173,7 +186,9 @@ begin
   AddItem('Status...', @mnuStatus);
   AddItem('Settings...', @mnuSettings);
   AddItem('Account...', @mnuAccount);
+  AddItem('Export log...', @mnuExportLog);
   AddSep;
+  AddItem('About', @mnuAbout);
   AddItem('Quit', @mnuQuit);
 end;
 
@@ -332,6 +347,7 @@ begin
       Log.Warn('engine', 'root reconcile: ' + detail);   // proceed anyway
 
   FEngine := TSyncEngine.Create(FConfig, token, FStatus);
+  FEngine.OnNotice := @HandleSyncNotice;   // set before Start so workers pick it up
   FEngine.Start;
 end;
 
@@ -450,6 +466,48 @@ begin
   TrayIcon.BalloonTitle := ATitle;
   TrayIcon.BalloonHint := AMsg;
   TrayIcon.ShowBalloonHint;
+end;
+
+{ Called on a worker thread: queue the notice and ask the GUI thread to drain. }
+procedure TMainForm.HandleSyncNotice(const ATitle, ABody: string);
+begin
+  FNoteLock.Enter;
+  try
+    FNotes.Add(ATitle + #9 + ABody);
+  finally
+    FNoteLock.Leave;
+  end;
+  TThread.Queue(nil, @DrainNotices);
+end;
+
+{ GUI thread: show all queued "synced" notices. }
+procedure TMainForm.DrainNotices;
+var
+  pending: TStringList;
+  i, sp: Integer;
+  line: string;
+begin
+  pending := TStringList.Create;
+  try
+    FNoteLock.Enter;
+    try
+      pending.Assign(FNotes);
+      FNotes.Clear;
+    finally
+      FNoteLock.Leave;
+    end;
+    for i := 0 to pending.Count - 1 do
+    begin
+      line := pending[i];
+      sp := Pos(#9, line);
+      if sp > 0 then
+        Notify(Copy(line, 1, sp - 1), Copy(line, sp + 1, MaxInt))
+      else
+        Notify('GotBox', line);
+    end;
+  finally
+    pending.Free;
+  end;
 end;
 
 procedure TMainForm.mnuOpenRoot(Sender: TObject);
@@ -591,6 +649,55 @@ begin
     // backend just became ready: content already in the root can now bootstrap
     TryBootstrap;
   end;
+end;
+
+procedure TMainForm.mnuExportLog(Sender: TObject);
+var
+  dlg: TSaveDialog;
+  src: TFileStream;
+  dst: TFileStream;
+begin
+  if not Assigned(Log) or (Log.Path = '') or not FileExists(Log.Path) then
+  begin
+    Notify('GotBox', 'No log file to export yet.');
+    Exit;
+  end;
+  dlg := TSaveDialog.Create(nil);
+  try
+    dlg.Title := 'Export GotBox log';
+    dlg.Filter := 'Log files|*.log;*.txt|All files|*.*';
+    dlg.DefaultExt := 'log';
+    dlg.Options := dlg.Options + [ofOverwritePrompt];
+    dlg.FileName := 'gotbox-' + FormatDateTime('yyyymmdd-hhnnss', Now) + '.log';
+    if not dlg.Execute then Exit;
+    try
+      // copy the on-disk log (shared read so the logger can keep appending)
+      src := TFileStream.Create(Log.Path, fmOpenRead or fmShareDenyNone);
+      try
+        dst := TFileStream.Create(dlg.FileName, fmCreate);
+        try
+          dst.CopyFrom(src, 0);
+        finally
+          dst.Free;
+        end;
+      finally
+        src.Free;
+      end;
+      Notify('GotBox', 'Log exported to ' + dlg.FileName);
+    except
+      on E: Exception do
+        MsgError('Could not export the log:' + LineEnding + E.Message);
+    end;
+  finally
+    dlg.Free;
+  end;
+end;
+
+procedure TMainForm.mnuAbout(Sender: TObject);
+begin
+  MsgInfo('GotBox ' + GOTBOX_VERSION + LineEnding + LineEnding +
+    'Edit locally, auto-sync everywhere via private GitHub repos.' +
+    LineEnding + LineEnding + 'https://github.com/fangq/GotBox');
 end;
 
 procedure TMainForm.mnuQuit(Sender: TObject);

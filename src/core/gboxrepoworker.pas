@@ -15,6 +15,10 @@ uses
   gboxgitrunner, gboxfilewatcher, gboxstatusmodel, gboxsync, gboxhistory;
 
 type
+  { Fired (on the worker thread) after a cycle that synced files, with a ready-
+    to-show notification title/body. The handler must marshal to the GUI. }
+  TSyncNoticeEvent = procedure(const ATitle, ABody: string) of object;
+
   TRepoWorker = class(TThread)
   private
     FName: string;
@@ -36,7 +40,9 @@ type
     FLastChange: TDateTime;
     FLastCycle: TDateTime;
     FCommitsSinceGc: Integer;
+    FOnNotice: TSyncNoticeEvent;
     procedure OnWatchChange(Sender: TObject);
+    procedure BuildNotice(AFiles: TStrings; out ATitle, ABody: string);
     procedure DoSyncCycle;
   protected
     procedure Execute; override;
@@ -50,12 +56,40 @@ type
     { Signal the thread to finish and stop watching. }
     procedure Stop;
     property RepoName: string read FName;
+    property OnNotice: TSyncNoticeEvent read FOnNotice write FOnNotice;
   end;
 
 implementation
 
 uses
-  gboxlog;
+  gboxlog, gboxsuper;
+
+{ Build a notification for the files synced this cycle: list up to 3 names,
+  otherwise just the count. Submodule files are prefixed with the repo name. }
+procedure TRepoWorker.BuildNotice(AFiles: TStrings; out ATitle, ABody: string);
+var
+  i: Integer;
+  prefix: string;
+begin
+  ATitle := 'GotBox - synced';
+  ABody := '';
+  if AFiles.Count = 0 then Exit;
+  if FName = GOTBOX_REPO then prefix := ''
+  else
+    prefix := FName + '/';
+  if AFiles.Count <= 3 then
+  begin
+    for i := 0 to AFiles.Count - 1 do
+    begin
+      if i > 0 then ABody := ABody + LineEnding;
+      ABody := ABody + prefix + AFiles[i];
+    end;
+  end
+  else if FName = GOTBOX_REPO then
+    ABody := Format('Synced %d files', [AFiles.Count])
+  else
+    ABody := Format('Synced %d files in %s', [AFiles.Count, FName]);
+end;
 
 constructor TRepoWorker.Create(const AName, ALocalPath, AUser, AToken, AMachine: string;
   ADebounceMs, AGcEvery, APullIntervalSec, AHistoryCap: Integer;
@@ -122,11 +156,12 @@ procedure TRepoWorker.DoSyncCycle;
 var
   git: TGitRunner;
   outcome: TSyncOutcome;
-  detail, td: string;
-  conflicts: TStringList;
+  detail, td, ntitle, nbody: string;
+  conflicts, changed: TStringList;
 begin
   if Assigned(FStatus) then FStatus.SetState(FName, rsSyncing, '');
   conflicts := TStringList.Create;
+  changed := TStringList.Create;
   git := TGitRunner.Create(FLocalPath);
   try
     git.AuthUser := FUser;
@@ -137,7 +172,15 @@ begin
     git.Git(['config', 'user.name', FCommitter]);
     git.Git(['config', 'user.email', FCommitter + '@gotbox.local']);
 
-    outcome := RunSyncCycle(git, FMachine, detail, conflicts);
+    outcome := RunSyncCycle(git, FMachine, detail, conflicts, changed);
+
+    // notify about files synced this cycle (added/modified, up or down)
+    if (outcome in [soPushed, soPulled, soMerged, soReset]) and
+      (changed.Count > 0) and Assigned(FOnNotice) then
+    begin
+      BuildNotice(changed, ntitle, nbody);
+      if nbody <> '' then FOnNotice(ntitle, nbody);
+    end;
 
     case outcome of
       soError:
@@ -192,6 +235,7 @@ begin
   finally
     git.Free;
     conflicts.Free;
+    changed.Free;
   end;
 end;
 
