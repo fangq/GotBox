@@ -2,7 +2,7 @@ name: Package
 
 # Builds the desktop installers and uploads them as workflow artifacts:
 #   Linux   -> .deb         (binary UPX-compressed)
-#   Windows -> Inno Setup .exe (binary UPX-compressed)
+#   Windows -> Inno Setup .exe (no UPX: it trips Defender/SmartScreen on unsigned exes)
 #   macOS   -> .dmg         (no UPX: it breaks code signing / modern macOS)
 # Runs on main and on version tags; also on demand. Tag pushes (v*) additionally
 # attach the installers to a GitHub Release.
@@ -139,16 +139,10 @@ jobs:
           echo "VERSION=$ver" >> "$GITHUB_ENV"
           echo "building version $ver"
 
-      - name: Install UPX + Inno Setup
+      - name: Install Inno Setup
         shell: pwsh
         run: |
-          choco install upx innosetup -y --no-progress
-
-      - name: Compress binary (UPX)
-        shell: pwsh
-        run: |
-          upx --best --lzma gotbox.exe
-          upx -t gotbox.exe
+          choco install innosetup -y --no-progress
 
       - name: Build installer (Inno Setup)
         shell: pwsh
