@@ -33,6 +33,7 @@ type
     CommitDebounceMs: Integer;  // coalesce save bursts
     PullIntervalSec: Integer;   // periodic sync-down
     GcEveryNCommits: Integer;   // maintenance cadence
+    LfsThresholdMB: Integer;    // track files >= this many MB with Git LFS (0 = off)
     RepoVisibility: string;     // "private"
     IgnoreGlobs: TStringList;
     Repos: TRepoEntryArray;
@@ -146,6 +147,9 @@ begin
   CommitDebounceMs := 5000;
   PullIntervalSec := 60;
   GcEveryNCommits := 25;
+  // default just under GitHub's 100 MB hard push limit, so LFS only engages for
+  // files plain git would otherwise reject (keeps LFS quota use minimal)
+  LfsThresholdMB := 95;
   RepoVisibility := 'private';
   IgnoreGlobs.Clear;
   IgnoreGlobs.Add('.git');
@@ -217,6 +221,7 @@ begin
       Result.CommitDebounceMs := obj.Get('commitDebounceMs', Result.CommitDebounceMs);
       Result.PullIntervalSec := obj.Get('pullIntervalSec', Result.PullIntervalSec);
       Result.GcEveryNCommits := obj.Get('gcEveryNCommits', Result.GcEveryNCommits);
+      Result.LfsThresholdMB := obj.Get('lfsThresholdMB', Result.LfsThresholdMB);
       Result.RepoVisibility := obj.Get('repoVisibility', Result.RepoVisibility);
 
       jrepos := obj.Find('ignoreGlobs');
@@ -272,6 +277,7 @@ begin
     obj.Add('commitDebounceMs', ACfg.CommitDebounceMs);
     obj.Add('pullIntervalSec', ACfg.PullIntervalSec);
     obj.Add('gcEveryNCommits', ACfg.GcEveryNCommits);
+    obj.Add('lfsThresholdMB', ACfg.LfsThresholdMB);
     obj.Add('repoVisibility', ACfg.RepoVisibility);
 
     globs := TJSONArray.Create;

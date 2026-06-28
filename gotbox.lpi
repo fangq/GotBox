@@ -57,7 +57,7 @@
         <PackageName Value="LCL"/>
       </Item1>
     </RequiredPackages>
-    <Units Count="23">
+    <Units Count="24">
       <Unit0>
         <Filename Value="gotbox.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -187,6 +187,11 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="gboxsuper"/>
       </Unit22>
+      <Unit23>
+        <Filename Value="src/core/gboxlfs.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxlfs"/>
+      </Unit23>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

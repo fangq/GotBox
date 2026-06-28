@@ -34,6 +34,10 @@ End-to-end functional, with a console test suite (`make tests`). Implemented:
 - **Conflicts** — unmergeable changes keep both versions and raise a tray alert.
 - **History cap** — rolling squash + force-push past the cap, with a
   rewrite-safe reset so other machines absorb the rewrite losslessly.
+- **Large files (Git LFS)** — files at/above a size threshold (`lfsThresholdMB`,
+  default 95 MB) are auto-tracked with Git LFS before they are first committed,
+  so they don't hit GitHub's 100 MB push limit. Requires `git-lfs` installed;
+  degrades to a no-op (with a warning) if it isn't.
 
 Possible next steps: native file-watch backends (inotify / ReadDirectoryChangesW
 / FSEvents) behind the existing watcher interface, file-manager context-menu
@@ -48,6 +52,9 @@ integration, and per-platform packaging/autostart.
 - Auto-creates private repos via the GitHub REST API.
 - Conflicts: keep both versions and flag the user (never lose data).
 - History cap: rolling squash + force-push; remote is source of truth.
+- Large files: opt-in Git LFS by size threshold; default 95 MB keeps LFS quota
+  use minimal (only files plain git would reject). Set `lfsThresholdMB` to `0`
+  to disable, or lower it to LFS-track more aggressively.
 
 ## Building
 

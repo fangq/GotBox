@@ -78,7 +78,7 @@ begin
       ignore.AddStrings(AExtraIgnore);
     w := TRepoWorker.Create(AName, APath, FCfg.GithubUser, FToken,
       FCfg.MachineName, FCfg.CommitDebounceMs, FCfg.GcEveryNCommits,
-      FCfg.PullIntervalSec, FCfg.HistoryCap, FStatus, ignore);
+      FCfg.PullIntervalSec, FCfg.HistoryCap, FCfg.LfsThresholdMB, FStatus, ignore);
     w.OnNotice := FOnNotice;
   finally
     ignore.Free;

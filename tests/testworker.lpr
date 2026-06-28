@@ -94,9 +94,9 @@ begin
   before := RemoteCommitCount(bareRepo);
   Check(before >= 1, 'remote has initial commit (' + IntToStr(before) + ')');
 
-  // small debounce so the test is quick; gc disabled
+  // small debounce so the test is quick; gc + LFS disabled
   worker := TRepoWorker.Create('proj', projDir, 'tester', '', 'testbox',
-    300, 0, 0, 0, nil, cfg.IgnoreGlobs);
+    300, 0, 0, 0, 0, nil, cfg.IgnoreGlobs);
   try
     worker.Start;
     Sleep(500);                        // let the watcher register its inotify watches

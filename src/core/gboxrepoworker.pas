@@ -12,7 +12,7 @@ interface
 
 uses
   Classes, SysUtils, DateUtils, SyncObjs,
-  gboxgitrunner, gboxfilewatcher, gboxstatusmodel, gboxsync, gboxhistory;
+  gboxgitrunner, gboxfilewatcher, gboxstatusmodel, gboxsync, gboxhistory, gboxlfs;
 
 type
   { Fired (on the worker thread) after a cycle that synced files, with a ready-
@@ -31,6 +31,9 @@ type
     FGcEvery: Integer;
     FPullIntervalMs: Integer;
     FHistoryCap: Integer;
+    FLfsThresholdMB: Integer;
+    FLfsChecked: Boolean;       // have we probed git-lfs availability yet?
+    FLfsOk: Boolean;            // is git-lfs available?
     FStatus: TStatusModel;
     FIgnore: TStringList;
     FWatcher: TFileWatcher;
@@ -48,7 +51,7 @@ type
     procedure Execute; override;
   public
     constructor Create(const AName, ALocalPath, AUser, AToken, AMachine: string;
-      ADebounceMs, AGcEvery, APullIntervalSec, AHistoryCap: Integer;
+      ADebounceMs, AGcEvery, APullIntervalSec, AHistoryCap, ALfsThresholdMB: Integer;
       AStatus: TStatusModel; AIgnore: TStrings);
     destructor Destroy; override;
     { Request an immediate sync (e.g. the user chose "Sync now"). }
@@ -92,7 +95,7 @@ begin
 end;
 
 constructor TRepoWorker.Create(const AName, ALocalPath, AUser, AToken, AMachine: string;
-  ADebounceMs, AGcEvery, APullIntervalSec, AHistoryCap: Integer;
+  ADebounceMs, AGcEvery, APullIntervalSec, AHistoryCap, ALfsThresholdMB: Integer;
   AStatus: TStatusModel; AIgnore: TStrings);
 begin
   inherited Create(True);            // suspended; caller calls Start
@@ -109,6 +112,7 @@ begin
   FGcEvery := AGcEvery;
   FPullIntervalMs := APullIntervalSec * 1000;
   FHistoryCap := AHistoryCap;
+  FLfsThresholdMB := ALfsThresholdMB;
   FStatus := AStatus;
   FLock := TCriticalSection.Create;
   FIgnore := TStringList.Create;
@@ -171,6 +175,22 @@ begin
     // config (e.g. submodule checkouts, fresh machines, CI runners)
     git.Git(['config', 'user.name', FCommitter]);
     git.Git(['config', 'user.email', FCommitter + '@gotbox.local']);
+
+    // Register oversized files with Git LFS before the cycle commits them, so
+    // they become LFS pointers instead of blowing GitHub's 100 MB push limit.
+    if FLfsThresholdMB > 0 then
+    begin
+      if not FLfsChecked then
+      begin
+        FLfsChecked := True;
+        FLfsOk := LfsAvailable(git);
+        if (not FLfsOk) and Assigned(Log) then
+          Log.Warn('worker', FName + ': git-lfs not installed; files over ' +
+            IntToStr(FLfsThresholdMB) + ' MB may be rejected on push');
+      end;
+      if FLfsOk then
+        TrackLargeFiles(git, Int64(FLfsThresholdMB) * 1024 * 1024);
+    end;
 
     outcome := RunSyncCycle(git, FMachine, detail, conflicts, changed);
 

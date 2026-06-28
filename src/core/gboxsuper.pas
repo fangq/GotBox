@@ -56,7 +56,7 @@ function IsGitWorkTree(const APath: string): Boolean;
 implementation
 
 uses
-  gboxlog;
+  gboxlog, gboxlfs;
 
 function IsGitWorkTree(const APath: string): Boolean;
 var
@@ -99,6 +99,7 @@ begin
     if who = '' then who := 'gotbox';
     git.Git(['config', 'user.name', who]);
     git.Git(['config', 'user.email', who + '@gotbox.local']);
+    LfsPostClone(git);   // materialize any LFS-stored files in the fresh clone
   finally
     git.Free;
   end;

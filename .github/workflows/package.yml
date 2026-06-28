@@ -82,7 +82,7 @@ jobs:
             echo "Priority: optional"
             echo "Architecture: ${arch}"
             echo "Depends: git, libgtk2.0-0, libx11-6, libc6"
-            echo "Recommends: libsecret-tools"
+            echo "Recommends: libsecret-tools, git-lfs"
             echo "Maintainer: Qianqian Fang <q.fang@northeastern.edu>"
             echo "Homepage: https://github.com/fangq/GotBox"
             echo "Description: Dropbox-like file sync over GitHub private repos"
