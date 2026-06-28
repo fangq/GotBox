@@ -25,6 +25,13 @@ FPCRES   ?= fpcres
 JCF      ?= $(HOME)/.local/bin/jcf
 PREFIX   ?= $(HOME)/.local
 
+# Optional: force the Lazarus install dir. Useful when lazbuild's saved config
+# points elsewhere (e.g. a different/older Lazarus, or a shared home whose
+# ~/.lazarus was written by another machine). Empty -> let lazbuild auto-detect.
+#   make LAZARUSDIR=/usr/lib/lazarus/2.2.0
+LAZARUSDIR ?=
+LAZDIR := $(if $(LAZARUSDIR),--lazarusdir="$(LAZARUSDIR)")
+
 PROJECT  := gotbox.lpi
 BIN      := gotbox
 JCFCFG   := tools/jcfsettings.cfg
@@ -51,21 +58,21 @@ $(RES): gotbox.rc gotbox.manifest $(ICON)
 
 # default build is the optimized, stripped Release mode (~3.6 MB vs ~30 MB debug)
 build release: $(RES)
-	$(LAZBUILD) --build-mode=Release $(PROJECT)
+	$(LAZBUILD) $(LAZDIR) --build-mode=Release $(PROJECT)
 
 # debug build keeps symbols/debug info for development (large, not stripped)
 debug: $(RES)
-	$(LAZBUILD) $(PROJECT)
+	$(LAZBUILD) $(LAZDIR) $(PROJECT)
 
 # ---- cross builds ---------------------------------------------------------
 linux: $(RES)
-	$(LAZBUILD) --operating-system=linux  --widgetset=gtk2  $(PROJECT)
+	$(LAZBUILD) $(LAZDIR) --operating-system=linux  --widgetset=gtk2  $(PROJECT)
 win64: $(RES)
-	$(LAZBUILD) --operating-system=win64  --cpu=x86_64 --widgetset=win32 $(PROJECT)
+	$(LAZBUILD) $(LAZDIR) --operating-system=win64  --cpu=x86_64 --widgetset=win32 $(PROJECT)
 win32: $(RES)
-	$(LAZBUILD) --operating-system=win32  --cpu=i386   --widgetset=win32 $(PROJECT)
+	$(LAZBUILD) $(LAZDIR) --operating-system=win32  --cpu=i386   --widgetset=win32 $(PROJECT)
 macos: $(RES)
-	$(LAZBUILD) --operating-system=darwin --widgetset=cocoa $(PROJECT)
+	$(LAZBUILD) $(LAZDIR) --operating-system=darwin --widgetset=cocoa $(PROJECT)
 
 # ---- tests ----------------------------------------------------------------
 # Each test is built and run under a hard per-test timeout (tests/run.sh) so a
