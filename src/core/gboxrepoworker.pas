@@ -208,6 +208,13 @@ begin
         if Assigned(FStatus) then FStatus.SetState(FName, rsError, detail);
         if Assigned(Log) then Log.Warn('worker', FName + ': ' + detail);
       end;
+      soOffline:
+      begin
+        // transient no-network: local work is committed; we retry next cycle.
+        // Not an error -- show a distinct "offline" state, log quietly.
+        if Assigned(FStatus) then FStatus.SetState(FName, rsOffline, detail);
+        if Assigned(Log) then Log.Info('worker', FName + ': ' + detail);
+      end;
       soConflict:
       begin
         if Assigned(FStatus) then
@@ -242,8 +249,10 @@ begin
       FCommitsSinceGc := 0;
     end;
 
-    // cap history once it has grown well past the limit (squash + force-push)
-    if (outcome <> soError) and ShouldTrim(git, FHistoryCap) then
+    // cap history once it has grown well past the limit (squash + force-push).
+    // Skip while offline -- the force-push would just fail without a network.
+    if (outcome <> soError) and (outcome <> soOffline) and
+      ShouldTrim(git, FHistoryCap) then
     begin
       if TrimHistory(git, FHistoryCap, td) then
       begin

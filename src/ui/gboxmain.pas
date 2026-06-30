@@ -247,6 +247,7 @@ begin
   FIcons[rsConflict] := MakeDot(RGBToColor(243, 156, 18)); // amber
   FIcons[rsError] := MakeDot(RGBToColor(231, 76, 60));     // red
   FIcons[rsPaused] := MakeDot(RGBToColor(149, 165, 166));  // grey
+  FIcons[rsOffline] := MakeDot(RGBToColor(127, 140, 141)); // slate grey (offline)
 end;
 
 procedure TMainForm.FreeIcons;
@@ -276,6 +277,7 @@ begin
     rsConflict: TrayIcon.Hint := 'GotBox - conflict';
     rsSyncing: TrayIcon.Hint := 'GotBox - syncing';
     rsPaused: TrayIcon.Hint := 'GotBox - paused';
+    rsOffline: TrayIcon.Hint := 'GotBox - offline (no network)';
     else
       TrayIcon.Hint := 'GotBox - synced';
   end;

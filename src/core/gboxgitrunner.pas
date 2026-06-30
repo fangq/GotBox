@@ -13,7 +13,12 @@ unit gboxgitrunner;
 interface
 
 uses
-  Classes, SysUtils, Process;
+  Classes, SysUtils, DateUtils, Process;
+
+const
+  { Network git ops (fetch/push/pull/clone/ls-remote) abort after this long
+    instead of hanging on a stalled connection. Local ops run untimed. }
+  GIT_NET_TIMEOUT_MS = 60000;
 
 type
   TGitResult = record
@@ -30,7 +35,7 @@ type
     FAuthUser: string;
     FAuthToken: string;
     FQuiet: Boolean;   // suppress warn-logging for expected-to-fail probes
-    function Run(const AArgs: array of string): TGitResult;
+    function Run(const AArgs: array of string; ATimeoutMs: Integer = 0): TGitResult;
     function EnsureAskPass: string;
   public
     { AWorkDir is the repo working tree (may be empty for clone/global ops). }
@@ -178,7 +183,7 @@ end;
 
 { ---- core runner ---- }
 
-function TGitRunner.Run(const AArgs: array of string): TGitResult;
+function TGitRunner.Run(const AArgs: array of string; ATimeoutMs: Integer): TGitResult;
 var
   proc: TProcess;
   outStream, errStream: TStringStream;
@@ -186,6 +191,8 @@ var
   n: LongInt;
   i: Integer;
   cmdline: string;
+  started: TDateTime;
+  timedOut: Boolean;
 begin
   Result.ExitCode := -1;
   Result.StdOut := '';
@@ -230,6 +237,8 @@ begin
     if Assigned(Log) then Log.Debug('git', cmdline + ' [' + FWorkDir + ']');
 
     proc.Execute;
+    started := Now;
+    timedOut := False;
     // drain both pipes until the process exits and no bytes remain
     repeat
       n := proc.Output.NumBytesAvailable;
@@ -249,12 +258,31 @@ begin
       if (not proc.Running) and (proc.Output.NumBytesAvailable = 0) and
         (proc.Stderr.NumBytesAvailable = 0) then
         Break;
+      // abort a stalled network op rather than block the worker forever
+      if (ATimeoutMs > 0) and proc.Running and
+        (MilliSecondsBetween(Now, started) >= ATimeoutMs) then
+      begin
+        timedOut := True;
+        proc.Terminate(124);   // SIGTERM-equivalent; conventional "timed out" code
+        Break;
+      end;
       Sleep(5);
     until False;
 
-    Result.ExitCode := proc.ExitStatus;
-    Result.StdOut := outStream.DataString;
-    Result.StdErr := errStream.DataString;
+    if timedOut then
+    begin
+      Result.ExitCode := 124;
+      Result.StdOut := outStream.DataString;
+      // contains "timed out" so callers classify it as an offline/network error
+      Result.StdErr := Format('git timed out after %d s (network stalled)',
+        [ATimeoutMs div 1000]);
+    end
+    else
+    begin
+      Result.ExitCode := proc.ExitStatus;
+      Result.StdOut := outStream.DataString;
+      Result.StdErr := errStream.DataString;
+    end;
     if (not Result.Ok) and (not FQuiet) and Assigned(Log) then
       Log.Warn('git', Format('exit %d: %s', [Result.ExitCode, Trim(Result.StdErr)]));
   finally
@@ -293,7 +321,7 @@ end;
 
 function TGitRunner.Clone(const AUrl, ADest: string): TGitResult;
 begin
-  Result := Run(['clone', AUrl, ADest]);
+  Result := Run(['clone', AUrl, ADest], GIT_NET_TIMEOUT_MS);
 end;
 
 function TGitRunner.AddAll: TGitResult;
@@ -309,19 +337,19 @@ end;
 function TGitRunner.Push(AForce: Boolean): TGitResult;
 begin
   if AForce then
-    Result := Run(['push', '--force-with-lease', 'origin', 'HEAD'])
+    Result := Run(['push', '--force-with-lease', 'origin', 'HEAD'], GIT_NET_TIMEOUT_MS)
   else
-    Result := Run(['push', 'origin', 'HEAD']);
+    Result := Run(['push', 'origin', 'HEAD'], GIT_NET_TIMEOUT_MS);
 end;
 
 function TGitRunner.Fetch: TGitResult;
 begin
-  Result := Run(['fetch', '--prune', 'origin']);
+  Result := Run(['fetch', '--prune', 'origin'], GIT_NET_TIMEOUT_MS);
 end;
 
 function TGitRunner.PullRebase: TGitResult;
 begin
-  Result := Run(['pull', '--rebase', 'origin']);
+  Result := Run(['pull', '--rebase', 'origin'], GIT_NET_TIMEOUT_MS);
 end;
 
 function TGitRunner.Merge(const ARef: string): TGitResult;

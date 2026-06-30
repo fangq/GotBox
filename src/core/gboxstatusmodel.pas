@@ -12,7 +12,8 @@ uses
   Classes, SysUtils, SyncObjs;
 
 type
-  TRepoState = (rsIdle, rsSyncing, rsSynced, rsConflict, rsError, rsPaused);
+  TRepoState = (rsIdle, rsSyncing, rsSynced, rsConflict, rsError, rsPaused,
+    rsOffline);
 
   TRepoStatus = record
     LocalName: string;
@@ -61,6 +62,7 @@ begin
     rsConflict: Result := 'Conflict';
     rsError: Result := 'Error';
     rsPaused: Result := 'Paused';
+    rsOffline: Result := 'Offline';
     else
       Result := '?';
   end;
@@ -198,10 +200,11 @@ end;
 function TStatusModel.AggregateState: TRepoState;
 var
   i, total, paused: Integer;
-  hasErr, hasConflict, hasSync: Boolean;
+  hasErr, hasConflict, hasOffline, hasSync: Boolean;
 begin
   hasErr := False;
   hasConflict := False;
+  hasOffline := False;
   hasSync := False;
   total := 0;
   paused := 0;
@@ -212,14 +215,17 @@ begin
       case FItems[i].State of
         rsError: hasErr := True;
         rsConflict: hasConflict := True;
+        rsOffline: hasOffline := True;
         rsSyncing: hasSync := True;
         rsPaused: Inc(paused);
       end;
   finally
     FLock.Leave;
   end;
+  // worst-first, but offline ranks below real errors/conflicts (it's transient)
   if hasErr then Result := rsError
   else if hasConflict then Result := rsConflict
+  else if hasOffline then Result := rsOffline
   else if hasSync then Result := rsSyncing
   else if (total > 0) and (paused = total) then Result := rsPaused
   else

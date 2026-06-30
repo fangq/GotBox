@@ -24,7 +24,7 @@ uses
 
 type
   TSyncOutcome = (soUpToDate, soPushed, soPulled, soMerged, soConflict,
-    soReset, soError);
+    soReset, soError, soOffline);
 
 function SyncOutcomeText(AOutcome: TSyncOutcome): string;
 
@@ -49,6 +49,7 @@ begin
     soConflict: Result := 'conflict (kept both)';
     soReset: Result := 'reset to rewritten remote';
     soError: Result := 'error';
+    soOffline: Result := 'offline';
     else
       Result := '?';
   end;
@@ -202,6 +203,7 @@ var
   r, mr: TGitResult;
   behind, ahead: Integer;
   hadStash: Boolean;
+  fetchErr: string;
 
 // append name-only output of a git command to AChanged (deduplicated)
   procedure Collect(const AArgs: array of string);
@@ -257,17 +259,30 @@ begin
   r := AGit.Fetch;
   if not r.Ok then
   begin
+    // capture the fetch error NOW: CommitLocal reassigns the shared r
+    fetchErr := Trim(r.StdErr);
     CommitLocal;   // at least keep local work safe
-    if (Pos('not found', LowerCase(r.StdErr)) > 0) or
-      (Pos('does not exist', LowerCase(r.StdErr)) > 0) then
-      ADetail := 'remote not found (deleted or no access): ' + Trim(r.StdErr)
-    else if (Pos('could not resolve', LowerCase(r.StdErr)) > 0) or
-      (Pos('could not read', LowerCase(r.StdErr)) > 0) or
-      (Pos('timed out', LowerCase(r.StdErr)) > 0) then
-      ADetail := 'offline: ' + Trim(r.StdErr)
+    if (Pos('not found', LowerCase(fetchErr)) > 0) or
+      (Pos('does not exist', LowerCase(fetchErr)) > 0) then
+    begin
+      ADetail := 'remote not found (deleted or no access): ' + fetchErr;
+      Exit(soError);
+    end
+    else if (Pos('could not resolve', LowerCase(fetchErr)) > 0) or
+      (Pos('could not read', LowerCase(fetchErr)) > 0) or
+      (Pos('connection', LowerCase(fetchErr)) > 0) or
+      (Pos('network', LowerCase(fetchErr)) > 0) or
+      (Pos('timed out', LowerCase(fetchErr)) > 0) then
+    begin
+      // transient: no network. Keep local commits; retry next cycle.
+      ADetail := 'offline: ' + fetchErr;
+      Exit(soOffline);
+    end
     else
-      ADetail := 'fetch failed: ' + Trim(r.StdErr);
-    Exit(soError);
+    begin
+      ADetail := 'fetch failed: ' + fetchErr;
+      Exit(soError);
+    end;
   end;
 
   // 2. remote branch present?

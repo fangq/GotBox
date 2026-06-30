@@ -14,6 +14,9 @@ uses
   {$IFDEF UNIX}
   BaseUnix,
   {$ENDIF}
+  {$IFDEF WINDOWS}
+  Windows,
+  {$ENDIF}
   gboxconfigstore,
   gboxdaemon,
   gboxmsg,
@@ -81,6 +84,20 @@ begin
 end;
   {$ENDIF}
 
+  {$IFDEF WINDOWS}
+var
+  GInstanceMutex: THandle = 0;
+
+  { Windows single-instance guard: hold a per-session named mutex for the
+    process lifetime (the handle is intentionally never closed). If the mutex
+    already exists, another GotBox is running. }
+function AlreadyRunning: Boolean;
+begin
+  GInstanceMutex := CreateMutex(nil, True, 'GotBox-SingleInstance');
+  Result := (GInstanceMutex <> 0) and (GetLastError = ERROR_ALREADY_EXISTS);
+end;
+  {$ENDIF}
+
 begin
   if WantHelp then
   begin
@@ -92,15 +109,15 @@ begin
   if WantDaemon then
     Daemonize;
 
-  {$IFDEF UNIX}
-  // single-instance guard -- after any daemon fork, so the pidfile records the
+  // single-instance guard -- after any daemon fork, so it records the
   // persistent (child) process, not a parent that exits right after forking
   if AlreadyRunning then
   begin
-    WriteLn('GotBox is already running.');
+    {$IFDEF UNIX}
+    WriteLn('GotBox is already running.');   // no console on a Windows GUI app
+    {$ENDIF}
     Halt(0);
   end;
-  {$ENDIF}
 
   RequireDerivedFormResource := True;
   Application.Title := 'GotBox';
