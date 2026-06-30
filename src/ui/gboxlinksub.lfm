@@ -13,8 +13,8 @@ object LinkSubForm: TLinkSubForm
     Left = 20
     Height = 16
     Top = 18
-    Width = 260
-    Caption = 'Local name (folder under .gotbox)'
+    Width = 380
+    Caption = 'Local folder or path under .gotbox (e.g. notes or projects/notes)'
   end
   object eName: TEdit
     Left = 20

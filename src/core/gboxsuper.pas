@@ -32,10 +32,18 @@ function EnsureGotboxRoot(ACfg: TGotConfig; const AToken: string;
 
 { Adds a submodule under the root. When ACreateUpstream, a new private repo named
   AUpstreamName is created via the provider; otherwise AExistingUrl is used.
-  ALocalName is the submodule's local path/name. Commits .gotbox and pushes. }
+  ALocalName is the submodule's local path/name -- it may be a relative path
+  (e.g. "projects/notes") to place the submodule in a sub-folder of the root.
+  Commits .gotbox and pushes. }
 function AddSubmodule(ACfg: TGotConfig;
   const AToken, ALocalName, AUpstreamName, AExistingUrl: string;
   ACreateUpstream: Boolean; out ADetail: string): Boolean;
+
+{ Validate + normalize a submodule local name that may be a relative path:
+  accepts either slash, rejects absolute paths and ".." (no escaping the root),
+  collapses redundant separators, and returns a clean forward-slash path (the
+  form git stores in .gitmodules). Returns False with AErr on invalid input. }
+function NormalizeSubmodulePath(const AInput: string; out APath, AErr: string): Boolean;
 
 { True if the remote .gotbox repo already exists with content (so a fresh machine
   should clone it rather than wait for local content to be created). }
@@ -198,6 +206,62 @@ begin
   end;
 end;
 
+function NormalizeSubmodulePath(const AInput: string; out APath, AErr: string): Boolean;
+var
+  raw, comp: string;
+  p: Integer;
+begin
+  Result := False;
+  APath := '';
+  AErr := '';
+  raw := Trim(AInput);
+  raw := StringReplace(raw, '\', '/', [rfReplaceAll]);   // accept either separator
+  if raw = '' then
+  begin
+    AErr := 'submodule name is empty';
+    Exit;
+  end;
+  if raw[1] = '/' then
+  begin
+    AErr := 'use a path relative to the root (no leading "/")';
+    Exit;
+  end;
+  if (Length(raw) >= 2) and (raw[2] = ':') then
+  begin
+    AErr := 'use a relative path, not an absolute path';
+    Exit;
+  end;
+  // validate + rejoin components, collapsing '' and '.', rejecting '..'
+  while raw <> '' do
+  begin
+    p := Pos('/', raw);
+    if p > 0 then
+    begin
+      comp := Copy(raw, 1, p - 1);
+      Delete(raw, 1, p);
+    end
+    else
+    begin
+      comp := raw;
+      raw := '';
+    end;
+    if (comp = '') or (comp = '.') then Continue;
+    if comp = '..' then
+    begin
+      AErr := '".." is not allowed in a submodule path';
+      Exit;
+    end;
+    if APath <> '' then APath := APath + '/';
+    APath := APath + comp;
+  end;
+  if APath = '' then
+  begin
+    AErr := 'submodule name is empty';
+    Exit;
+  end;
+  Result := True;
+end;
+
 function AddSubmodule(ACfg: TGotConfig;
   const AToken, ALocalName, AUpstreamName, AExistingUrl: string;
   ACreateUpstream: Boolean; out ADetail: string): Boolean;
@@ -205,15 +269,11 @@ var
   prov: TRemoteProvider;
   git, subgit: TGitRunner;
   r: TGitResult;
-  url: string;
+  url, localPath: string;
 begin
   Result := False;
   ADetail := '';
-  if Trim(ALocalName) = '' then
-  begin
-    ADetail := 'submodule name is empty';
-    Exit;
-  end;
+  if not NormalizeSubmodulePath(ALocalName, localPath, ADetail) then Exit;
 
   prov := MakeProvider(ACfg, AToken);
   try
@@ -241,9 +301,10 @@ begin
       git.AuthUser := prov.AuthUser;
       git.AuthToken := prov.AuthToken;
 
-      // add the submodule (allow the file protocol so local/test remotes work)
+      // add the submodule (allow the file protocol so local/test remotes work).
+      // git uses the path as the submodule name; forward slashes work on all OSes
       r := git.Git(['-c', 'protocol.file.allow=always', 'submodule',
-        'add', '--force', url, ALocalName]);
+        'add', '--force', url, localPath]);
       if not r.Ok then
       begin
         ADetail := 'submodule add failed: ' + Trim(r.StdErr);
@@ -252,12 +313,12 @@ begin
 
       // list-only pointer tracking: don't let submodule commits churn .gotbox
       git.Git(['config', '-f', '.gitmodules', 'submodule.' +
-        ALocalName + '.ignore', 'all']);
+        localPath + '.ignore', 'all']);
 
       // ensure the submodule is on the main branch (not detached) so the
       // per-submodule sync worker can auto-commit to it later
       subgit := TGitRunner.Create(IncludeTrailingPathDelimiter(ACfg.RootDir) +
-        ALocalName);
+        SetDirSeparators(localPath));
       try
         subgit.AuthUser := prov.AuthUser;
         subgit.AuthToken := prov.AuthToken;
@@ -268,7 +329,7 @@ begin
 
       // commit + push the superproject (.gitmodules + the new gitlink)
       git.AddAll;
-      r := git.CommitAll('add submodule ' + ALocalName);
+      r := git.CommitAll('add submodule ' + localPath);
       if not r.Ok then
       begin
         ADetail := 'commit .gotbox failed: ' + Trim(r.StdErr);
@@ -277,7 +338,7 @@ begin
       git.Push(False);
       Result := True;
       if Assigned(Log) then
-        Log.Info('super', Format('added submodule %s -> %s', [ALocalName, url]));
+        Log.Info('super', Format('added submodule %s -> %s', [localPath, url]));
     finally
       git.Free;
     end;

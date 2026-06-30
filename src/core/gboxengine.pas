@@ -63,7 +63,9 @@ end;
 
 function TSyncEngine.LocalPathOf(const AName: string): string;
 begin
-  Result := IncludeTrailingPathDelimiter(FCfg.RootDir) + AName;
+  // AName may be a relative path with '/' separators (nested submodule); convert
+  // to native separators for filesystem/git working-dir use
+  Result := IncludeTrailingPathDelimiter(FCfg.RootDir) + SetDirSeparators(AName);
 end;
 
 procedure TSyncEngine.SpawnWorker(const AName, APath: string; AExtraIgnore: TStrings);

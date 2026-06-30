@@ -97,7 +97,7 @@ var
   end;
 
 var
-  base, root, detail, outp: string;
+  base, root, detail, outp, np: string;
   cfg, cfg2: TGotConfig;
   subs: TSubmoduleArray;
 begin
@@ -156,9 +156,25 @@ begin
   Check(DirectoryExists(IncludeTrailingPathDelimiter(base) + 'projectupstream.git'),
     'new upstream bare created');
 
-  // 4) list submodules
+  // 3b) NormalizeSubmodulePath: accepts relative paths, rejects unsafe input
+  Check(NormalizeSubmodulePath('a\b\c', np, detail) and (np = 'a/b/c'),
+    'normalize backslashes -> a/b/c (' + np + ')');
+  Check(NormalizeSubmodulePath('a//b/./c', np, detail) and (np = 'a/b/c'),
+    'normalize collapses // and . -> a/b/c (' + np + ')');
+  Check(not NormalizeSubmodulePath('/abs', np, detail), 'reject absolute path');
+  Check(not NormalizeSubmodulePath('a/../b', np, detail), 'reject .. traversal');
+
+  // 3c) add a submodule at a NESTED relative path (sub-folder of the root)
+  Check(AddSubmodule(cfg, '', 'projects/notes', 'notesupstream', '', True, detail),
+    'add nested submodule projects/notes (' + detail + ')');
+  Check(DirectoryExists(IncludeTrailingPathDelimiter(root) + 'projects' +
+    PathDelim + 'notes'), 'nested submodule dir exists at projects/notes');
+  Git(root, ['config', '-f', '.gitmodules', 'submodule.projects/notes.ignore'], outp);
+  Check(Trim(outp) = 'all', 'nested submodule ignore=all set under its path');
+
+  // 4) list submodules (docs, myproj, projects/notes)
   subs := ListSubmodules(root);
-  Check(Length(subs) = 2, 'lists 2 submodules (got ' + IntToStr(Length(subs)) + ')');
+  Check(Length(subs) = 3, 'lists 3 submodules (got ' + IntToStr(Length(subs)) + ')');
 
   // 5) second machine: EnsureGotboxRoot on an empty root clones --recursive
   cfg2 := TGotConfig.Create;
@@ -173,6 +189,9 @@ begin
     'submodule "docs" checked out on root2');
   Check(FileExists(IncludeTrailingPathDelimiter(cfg2.RootDir) + 'docs' +
     PathDelim + 'seed.txt'), 'submodule content present on root2 (recursive clone)');
+  Check(IsGitWorkTree(IncludeTrailingPathDelimiter(cfg2.RootDir) +
+    'projects' + PathDelim + 'notes'),
+    'nested submodule checked out on root2 (recursive clone)');
   cfg2.Free;
 
   // 6) resurrect: remote .gotbox deleted but local tree exists -> EnsureGotboxRoot

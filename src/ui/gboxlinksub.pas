@@ -61,7 +61,8 @@ procedure TLinkSubForm.btnOKClick(Sender: TObject);
 begin
   if Trim(eName.Text) = '' then
   begin
-    MsgInfo('Enter a local name for the submodule folder.');
+    MsgInfo('Enter a local folder name or relative path for the submodule ' +
+      '(e.g. "notes" or "projects/notes").');
     Exit;
   end;
   if rbExisting.Checked and (Trim(eUrl.Text) = '') then

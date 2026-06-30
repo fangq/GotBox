@@ -547,7 +547,7 @@ end;
 
 procedure TMainForm.mnuLinkSub(Sender: TObject);
 var
-  token, err, detail: string;
+  token, err, detail, localName: string;
   ok: Boolean;
   entry: TRepoEntry;
 begin
@@ -574,11 +574,18 @@ begin
 
   if not LinkSubForm.Run then Exit;   // user cancelled
 
+  // accept a relative path (e.g. "projects/notes"); store the same normalized
+  // form git uses in .gitmodules so the per-repo config keys match
+  if not NormalizeSubmodulePath(LinkSubForm.LocalName, localName, detail) then
+  begin
+    MsgError('Invalid submodule path:' + LineEnding + detail);
+    Exit;
+  end;
+
   Screen.Cursor := crHourGlass;
   try
-    ok := AddSubmodule(FConfig, token, LinkSubForm.LocalName,
-      LinkSubForm.UpstreamName, LinkSubForm.ExistingUrl,
-      LinkSubForm.CreateUpstream, detail);
+    ok := AddSubmodule(FConfig, token, localName, LinkSubForm.UpstreamName,
+      LinkSubForm.ExistingUrl, LinkSubForm.CreateUpstream, detail);
   finally
     Screen.Cursor := crDefault;
   end;
@@ -590,14 +597,14 @@ begin
   end;
 
   // record the new submodule in config (for the per-submodule Paused flag)
-  entry.LocalName := LinkSubForm.LocalName;
+  entry.LocalName := localName;
   entry.RemoteUrl := '';
   entry.Paused := False;
   FConfig.UpsertRepo(entry);
   FStore.Save(FConfig);
 
   StartEngine;   // (re)start sync to pick up the new submodule
-  Notify('GotBox', 'Linked submodule "' + LinkSubForm.LocalName + '".');
+  Notify('GotBox', 'Linked submodule "' + localName + '".');
 end;
 
 procedure TMainForm.mnuSyncNow(Sender: TObject);
@@ -651,7 +658,8 @@ procedure TMainForm.HandleOpenRepo(const ARepo: string);
 var
   p: string;
 begin
-  p := IncludeTrailingPathDelimiter(FConfig.RootDir) + ARepo;
+  // ARepo may be a relative path with '/' separators (nested submodule)
+  p := IncludeTrailingPathDelimiter(FConfig.RootDir) + SetDirSeparators(ARepo);
   if DirectoryExists(p) then OpenDocument(p);
 end;
 
