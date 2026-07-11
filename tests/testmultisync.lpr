@@ -66,6 +66,16 @@ var
       WriteLn('  FAIL - ', AName);
       Inc(failures);
     end;
+    Flush(Output);   // flush so the last result survives a hard kill (timeout)
+  end;
+
+  { Flushed progress marker. On a hang the runner kills the process and prints
+    the tail of the log, so the last "STEP" line pinpoints where it hung. Flush
+    is essential: redirected stdout is block-buffered and would be lost on kill. }
+  procedure Step(const AMsg: string);
+  begin
+    WriteLn('== STEP: ', AMsg);
+    Flush(Output);
   end;
 
   { Recursively remove a directory (RTL has no DeleteDirectory). }
@@ -256,12 +266,15 @@ begin
   try
     // ---- machine 1: create the .gotbox root + a submodule "proj" ------------
     InitCfg(cfg1, root1, 'm1');
+    Step('setup: m1 EnsureGotboxRoot');
     Check(EnsureGotboxRoot(cfg1, '', detail), 'm1: EnsureGotboxRoot (' + detail + ')');
+    Step('setup: m1 AddSubmodule proj');
     Check(AddSubmodule(cfg1, '', 'proj', 'projup', '', True, detail),
       'm1: add submodule proj (' + detail + ')');
     gotboxBare := IncludeTrailingPathDelimiter(base) + '.gotbox.git';
 
     // ---- machine 2: a fresh clone of the .gotbox root -----------------------
+    Step('setup: m2 clone .gotbox');
     g := TGitRunner.Create('');
     try
       Check(g.Clone(gotboxBare, root2).Ok, 'm2: clone .gotbox root');
@@ -270,6 +283,7 @@ begin
     end;
     InitCfg(cfg2, root2, 'm2');
 
+    Step('setup: start engine1 + engine2');
     engine1 := TSyncEngine.Create(cfg1, '', status1);
     engine2 := TSyncEngine.Create(cfg2, '', status2);
     engine1.Start;
@@ -277,6 +291,7 @@ begin
 
     // machine 2 must auto-check-out the submodule the clone brought as a bare
     // gitlink, and spawn a worker for it
+    Step('phase 0: wait m2 auto-checkout submodule');
     deadline := Now + EncodeTime(0, 0, 15, 0);
     repeat Tick until IsGitWorkTree(IncludeTrailingPathDelimiter(root2) + 'proj')
       or (Now > deadline);
@@ -284,6 +299,7 @@ begin
       'm2: submodule auto-checked-out on the fresh clone');
 
     // ---- (1) machine 1 creates content -> machine 2 must receive it ---------
+    Step('phase 1: m1 creates content -> m2 receives');
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'rootnote.txt', 'from-m1-root');
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'proj' + PathDelim +
       'subnote.txt', 'from-m1-sub');
@@ -301,6 +317,7 @@ begin
       'm2: received submodule file created on m1 (gitlink carried across)');
 
     // ---- (2) machine 2 deletes both files -> machine 1 must see deletions ---
+    Step('phase 2: m2 deletes files -> m1 sees deletions');
     DeleteFile(IncludeTrailingPathDelimiter(root2) + 'rootnote.txt');
     DeleteFile(IncludeTrailingPathDelimiter(root2) + 'proj' + PathDelim +
       'subnote.txt');
@@ -323,6 +340,7 @@ begin
     // driven path above, but it proves those two triggers work end to end -- for
     // the submodule too (proj's watcher pushes its content; the root's periodic
     // timer then carries the gitlink bump). The loop below only sleeps.
+    Step('phase 3: watcher-only propagation (no SyncAllNow)');
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'watch.txt', 'watcher-m1-root');
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'proj' + PathDelim +
       'watch_sub.txt', 'watcher-m1-sub');
@@ -340,6 +358,7 @@ begin
       'm2: received submodule file with no explicit sync (watcher + pull timer)');
 
     // ---- (4) add + remove a plain top-level folder --------------------------
+    Step('phase 4: add + remove a plain top-level folder');
     ForceDirectories(IncludeTrailingPathDelimiter(root1) + 'docs');
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'docs' + PathDelim + 'a.txt',
       'docs-data');
@@ -361,11 +380,14 @@ begin
     // worker on the index, then restart. m2 picks it up via its own reconcile
     // (which stops/starts and checks the new submodule out) once the new
     // .gitmodules/gitlink is pulled.
+    Step('phase 5: add deep submodule projects/notes (stop engine1)');
     engine1.Stop;
+    Step('phase 5: engine1 stopped; AddSubmodule projects/notes');
     Check(AddSubmodule(cfg1, '', 'projects/notes', 'notesup', '', True, detail),
       'm1: add deep submodule projects/notes (' + detail + ')');
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'projects' + PathDelim +
       'notes' + PathDelim + 'note.md', 'deep-sub-data');
+    Step('phase 5: restart engine1');
     engine1.Start;
 
     deadline := Now + EncodeTime(0, 0, 20, 0);
@@ -386,8 +408,10 @@ begin
     // keeps re-committing the proj gitlink it still has while m1 is removing it,
     // and they only settle once m2 reconciles. So: stop m2, let m1 remove +
     // push, then start m2 to pull the settled removal and reconcile its workers.
+    Step('phase 6: remove submodule proj (stop engine2 + engine1)');
     engine2.Stop;
     engine1.Stop;
+    Step('phase 6: engines stopped; RmRf proj + restart engine1');
     RmRf(IncludeTrailingPathDelimiter(root1) + 'proj');
     engine1.Start;
     deadline := Now + EncodeTime(0, 0, 20, 0);
@@ -399,6 +423,7 @@ begin
     Check(not SubmoduleRegistered(root1, 'proj'),
       'm1: removed submodule unlinked from its own .gitmodules');
 
+    Step('phase 6: restart engine2 to pull removal + reconcile');
     engine2.Start;   // m2 now pulls the settled removal and reconciles
     deadline := Now + EncodeTime(0, 0, 20, 0);
     repeat
@@ -413,6 +438,7 @@ begin
     // ---- (7) a stray nested git repo inside a folder ------------------------
     // A folder holding BOTH a normal file (must sync) and a nested git repo
     // (must be excluded, never committed as a gitlink, never propagated).
+    Step('phase 7: stray nested git repo inside a folder');
     ForceDirectories(IncludeTrailingPathDelimiter(root1) + 'mixed');
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'mixed' + PathDelim + 'keep.txt',
       'mixed-keep');
@@ -452,6 +478,7 @@ begin
     // ---- (7b) delete a top folder that still holds a nested git repo --------
     // (the real-world case): removing the folder drops the tracked sibling on
     // both machines; nothing crashes on the excluded repo left behind locally.
+    Step('phase 7b: delete top folder holding a nested repo');
     RmRf(IncludeTrailingPathDelimiter(root1) + 'mixed');
     DriveOne(engine1, 6);
     deadline := Now + EncodeTime(0, 0, 15, 0);
@@ -464,6 +491,7 @@ begin
     // engine is stopped while m1 accumulates a batch of changes -- add a file,
     // delete a file, and add a whole new submodule -- then m2 comes back and must
     // reconcile the entire batch at once (not just the latest change).
+    Step('phase 8: m2 offline; m1 batches changes (stop engine2)');
     engine2.Stop;   // m2 goes offline
 
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'offline_add.txt',
@@ -471,6 +499,7 @@ begin
     DeleteFile(IncludeTrailingPathDelimiter(root1) + 'watch.txt');  // (synced in phase 3)
     DriveOne(engine1, 6);   // m1 commits+pushes these while m2 is offline
 
+    Step('phase 8: AddSubmodule offsub while m2 offline (stop engine1)');
     engine1.Stop;           // structural: add a submodule while m2 is offline
     Check(AddSubmodule(cfg1, '', 'offsub', 'offsubup', '', True, detail),
       'm1: add submodule offsub while m2 offline (' + detail + ')');
@@ -481,6 +510,7 @@ begin
 
     // ...and delete a TOP FOLDER that itself contains a submodule (projects/
     // holds the deep submodule projects/notes) -- m1 unlinks the submodule.
+    Step('phase 8: delete projects/ (submodule-containing top folder)');
     engine1.Stop;
     RmRf(IncludeTrailingPathDelimiter(root1) + 'projects');
     engine1.Start;
@@ -493,6 +523,7 @@ begin
     Check(not SubmoduleRegistered(root1, 'projects/notes'),
       'm1: deleting a submodule-containing top folder unlinked the submodule');
 
+    Step('phase 8: restart engine2 -- catch up on the whole batch');
     engine2.Start;          // m2 back online -- catch up on the whole batch at once
     deadline := Now + EncodeTime(0, 0, 20, 0);
     repeat
@@ -520,6 +551,7 @@ begin
     // m3 joins late (fresh clone), catches up to the accumulated state, then a
     // change must fan out to ALL other machines both ways: m1 -> {m2, m3} and
     // m3 -> {m1, m2} -- including submodule content, not just loose files.
+    Step('phase 9: third machine m3 joins (clone + start)');
     Tick;
     Tick;   // flush m1/m2 pushes so the bare is current before m3 clones it
     g := TGitRunner.Create('');
@@ -548,6 +580,7 @@ begin
     // m1 -> all: a root file AND a submodule file reach BOTH m2 and m3. Push
     // from m1 alone first (three engines all pushing .gotbox at once just race
     // and thrash), then let m2/m3 fast-forward it in.
+    Step('phase 9: m1 -> {m2,m3} fan-out (root + submodule)');
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'tw_root.txt', 'tw-from-m1');
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'offsub' + PathDelim +
       'tw_sub.txt', 'tw-sub-from-m1');
@@ -569,6 +602,7 @@ begin
 
     // m3 -> all: a change originating on m3 reaches m1 and m2 (push m3 alone
     // first, same reason).
+    Step('phase 9: m3 -> {m1,m2} fan-out');
     WriteFile(IncludeTrailingPathDelimiter(root3) + 'tw_from3.txt', 'tw-from-m3');
     DriveOne(engine3, 8);
     deadline := Now + EncodeTime(0, 0, 20, 0);
