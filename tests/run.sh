@@ -9,7 +9,7 @@
 cd "$(dirname "$0")" || exit 2
 
 FPC="${FPC:-fpc}"
-TIMEOUT="${TIMEOUT:-300}"   # headroom for the multi-machine / binary E2E tests
+TIMEOUT="${TIMEOUT:-120}"   # per-test cap (see the multi-machine test note below)
                             # (Windows CI spawns git ~10x slower than Linux)
 OUT=lib
 mkdir -p "$OUT"

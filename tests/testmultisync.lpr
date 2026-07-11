@@ -288,6 +288,7 @@ begin
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'proj' + PathDelim +
       'subnote.txt', 'from-m1-sub');
 
+    DriveOne(engine1, 6);   // push from m1 alone first (avoid 2-writer contention)
     deadline := Now + EncodeTime(0, 0, 15, 0);
     repeat
       Tick;
@@ -304,6 +305,7 @@ begin
     DeleteFile(IncludeTrailingPathDelimiter(root2) + 'proj' + PathDelim +
       'subnote.txt');
 
+    DriveOne(engine2, 6);   // push the deletions from m2 alone first
     deadline := Now + EncodeTime(0, 0, 15, 0);
     repeat
       Tick;
@@ -325,7 +327,7 @@ begin
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'proj' + PathDelim +
       'watch_sub.txt', 'watcher-m1-sub');
 
-    deadline := Now + EncodeTime(0, 0, 45, 0);
+    deadline := Now + EncodeTime(0, 0, 20, 0);
     repeat
       CheckSynchronize(0);   // runtime plumbing only (as the daemon does)
       Sleep(400);            // NB: no engine.SyncAllNow -- watcher + pull timer only
@@ -341,12 +343,14 @@ begin
     ForceDirectories(IncludeTrailingPathDelimiter(root1) + 'docs');
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'docs' + PathDelim + 'a.txt',
       'docs-data');
+    DriveOne(engine1, 6);
     deadline := Now + EncodeTime(0, 0, 15, 0);
     repeat Tick until FileHas(root2, 'docs/a.txt', 'docs-data') or (Now > deadline);
     Check(FileHas(root2, 'docs/a.txt', 'docs-data'),
       'm2: received a new top-level folder created on m1');
 
     RmRf(IncludeTrailingPathDelimiter(root1) + 'docs');
+    DriveOne(engine1, 6);
     deadline := Now + EncodeTime(0, 0, 15, 0);
     repeat Tick until Missing(root2, 'docs/a.txt') or (Now > deadline);
     Check(Missing(root2, 'docs/a.txt'),
@@ -364,7 +368,7 @@ begin
       'notes' + PathDelim + 'note.md', 'deep-sub-data');
     engine1.Start;
 
-    deadline := Now + EncodeTime(0, 0, 45, 0);
+    deadline := Now + EncodeTime(0, 0, 20, 0);
     repeat
       Tick;
       ready := IsGitWorkTree(IncludeTrailingPathDelimiter(root2) + 'projects' +
@@ -396,7 +400,7 @@ begin
       'm1: removed submodule unlinked from its own .gitmodules');
 
     engine2.Start;   // m2 now pulls the settled removal and reconciles
-    deadline := Now + EncodeTime(0, 0, 25, 0);
+    deadline := Now + EncodeTime(0, 0, 20, 0);
     repeat
       Tick;
       ready := (not SubmoduleRegistered(root2, 'proj')) and (not Tracked(root2, 'proj'));
@@ -433,6 +437,7 @@ begin
       Free;
     end;
 
+    DriveOne(engine1, 6);
     deadline := Now + EncodeTime(0, 0, 15, 0);
     repeat Tick until FileHas(root2, 'mixed/keep.txt', 'mixed-keep') or (Now > deadline);
     Check(FileHas(root2, 'mixed/keep.txt', 'mixed-keep'),
@@ -448,6 +453,7 @@ begin
     // (the real-world case): removing the folder drops the tracked sibling on
     // both machines; nothing crashes on the excluded repo left behind locally.
     RmRf(IncludeTrailingPathDelimiter(root1) + 'mixed');
+    DriveOne(engine1, 6);
     deadline := Now + EncodeTime(0, 0, 15, 0);
     repeat Tick until Missing(root2, 'mixed/keep.txt') or (Now > deadline);
     Check(Missing(root2, 'mixed/keep.txt'),
@@ -488,7 +494,7 @@ begin
       'm1: deleting a submodule-containing top folder unlinked the submodule');
 
     engine2.Start;          // m2 back online -- catch up on the whole batch at once
-    deadline := Now + EncodeTime(0, 0, 30, 0);
+    deadline := Now + EncodeTime(0, 0, 20, 0);
     repeat
       Tick;
       ready := FileHas(root2, 'offline_add.txt', 'added-while-m2-offline') and
@@ -526,7 +532,7 @@ begin
     engine3 := TSyncEngine.Create(cfg3, '', status3);
     engine3.Start;
 
-    deadline := Now + EncodeTime(0, 0, 25, 0);
+    deadline := Now + EncodeTime(0, 0, 20, 0);
     repeat
       Tick;
       ready := FileHas(root3, 'offline_add.txt', 'added-while-m2-offline') and
@@ -546,7 +552,7 @@ begin
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'offsub' + PathDelim +
       'tw_sub.txt', 'tw-sub-from-m1');
     DriveOne(engine1, 8);
-    deadline := Now + EncodeTime(0, 0, 25, 0);
+    deadline := Now + EncodeTime(0, 0, 20, 0);
     repeat
       Tick;
       ready := FileHas(root2, 'tw_root.txt', 'tw-from-m1') and
@@ -565,7 +571,7 @@ begin
     // first, same reason).
     WriteFile(IncludeTrailingPathDelimiter(root3) + 'tw_from3.txt', 'tw-from-m3');
     DriveOne(engine3, 8);
-    deadline := Now + EncodeTime(0, 0, 25, 0);
+    deadline := Now + EncodeTime(0, 0, 20, 0);
     repeat
       Tick;
       ready := FileHas(root1, 'tw_from3.txt', 'tw-from-m3') and
