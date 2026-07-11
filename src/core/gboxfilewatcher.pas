@@ -485,7 +485,7 @@ var
   bytes: DWORD;
   filter: DWORD;
   info: PFILE_NOTIFY_INFORMATION;
-  off: DWORD;
+  off, nlen: DWORD;
   nm: WideString;
   changed: Boolean;
 begin
@@ -507,17 +507,26 @@ begin
 
     changed := False;
     off := 0;
-    repeat
+    // Parse strictly within the `bytes` the OS reported, validating that each
+    // record's fixed header (12 bytes) AND its name fit -- never trust the
+    // NextEntryOffset chain to self-terminate in bounds. A truncated buffer
+    // would otherwise walk `off` past `buf` and Move() past its end (an
+    // out-of-bounds read that faults as runtime error 217 on Windows).
+    while off + 12 <= bytes do    // 12 = NextEntryOffset + Action + FileNameLength
+    begin
       info := PFILE_NOTIFY_INFORMATION(@buf[off]);
-      SetLength(nm, info^.FileNameLength div SizeOf(WideChar));
+      nlen := info^.FileNameLength;
+      if (nlen > bytes) or (off + 12 + nlen > bytes) then Break;
+      SetLength(nm, nlen div SizeOf(WideChar));
       if Length(nm) > 0 then
-        Move(info^.FileName, nm[1], info^.FileNameLength);
+        Move(info^.FileName, nm[1], nlen);
       // ignore anything under .git or matching an ignore glob
       if (Pos('\.git\', '\' + string(nm)) = 0) and
         not FOwner.Ignored(ExtractFileName(string(nm))) then
         changed := True;
+      if info^.NextEntryOffset = 0 then Break;
       off := off + info^.NextEntryOffset;
-    until info^.NextEntryOffset = 0;
+    end;
 
     if changed then FOwner.Fire;
   end;
@@ -545,14 +554,14 @@ begin
   if Assigned(FThread) then FThread.Terminate;
   // CancelIoEx reliably aborts the pending synchronous ReadDirectoryChangesW
   // (merely closing the handle does not always unblock it).
-  if FDir <> INVALID_HANDLE_VALUE then
+  if (FDir <> 0) and (FDir <> INVALID_HANDLE_VALUE) then
     CancelIoEx(FDir, nil);
   if Assigned(FThread) then
   begin
     FThread.WaitFor;
     FreeAndNil(FThread);
   end;
-  if FDir <> INVALID_HANDLE_VALUE then
+  if (FDir <> 0) and (FDir <> INVALID_HANDLE_VALUE) then
   begin
     CloseHandle(FDir);
     FDir := INVALID_HANDLE_VALUE;
