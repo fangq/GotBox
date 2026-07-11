@@ -232,6 +232,7 @@ var
   g: TGitRunner;
   deadline: TDateTime;
   ready: Boolean;
+  tickN: Integer;   // heartbeat counter for the phase-8 catch-up wait
 
   { Fill a fresh config for the git (local) backend. }
   procedure InitCfg(ACfg: TGotConfig; const ARoot, AMachine: string);
@@ -525,8 +526,12 @@ begin
 
     Step('phase 8: restart engine2 -- catch up on the whole batch');
     engine2.Start;          // m2 back online -- catch up on the whole batch at once
+    Step('phase 8: engine2.Start returned; entering catch-up wait');
     deadline := Now + EncodeTime(0, 0, 20, 0);
+    tickN := 0;
     repeat
+      Inc(tickN);
+      Step('phase 8: catch-up tick ' + IntToStr(tickN));   // last line if a Tick hangs
       Tick;
       ready := FileHas(root2, 'offline_add.txt', 'added-while-m2-offline') and
         Missing(root2, 'watch.txt') and
