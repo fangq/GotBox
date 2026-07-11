@@ -9,7 +9,8 @@
 cd "$(dirname "$0")" || exit 2
 
 FPC="${FPC:-fpc}"
-TIMEOUT="${TIMEOUT:-120}"   # headroom for the expanded multi-machine test
+TIMEOUT="${TIMEOUT:-300}"   # headroom for the multi-machine / binary E2E tests
+                            # (Windows CI spawns git ~10x slower than Linux)
 OUT=lib
 mkdir -p "$OUT"
 
@@ -19,6 +20,18 @@ mkdir -p "$OUT"
 : > "$OUT/empty.gitconfig"
 export GIT_CONFIG_GLOBAL="$PWD/$OUT/empty.gitconfig"
 export GIT_CONFIG_SYSTEM="$PWD/$OUT/empty.gitconfig"
+
+# Build the headless daemon so the binary end-to-end test (teste2e) can launch
+# it. It is LCL-free (pure src/core), so a plain FPC build suffices. If this
+# fails, teste2e skips itself rather than failing the suite.
+mkdir -p "$OUT/gotboxd"
+if "$FPC" -O2 -Fu../src/core -FU"$OUT/gotboxd" -o../gotboxd ../gotboxd.lpr \
+    >"$OUT/gotboxd.build.log" 2>&1; then
+  export GOTBOXD="$(cd .. && pwd)/gotboxd"
+  echo "built gotboxd for teste2e"
+else
+  echo "note: gotboxd build failed; teste2e will skip (see $OUT/gotboxd.build.log)"
+fi
 
 # pick a timeout wrapper if available (macOS ships none; coreutils brings gtimeout)
 if command -v timeout >/dev/null 2>&1; then
@@ -31,7 +44,7 @@ else
 fi
 
 # fast, watcher-independent tests first; timed/integration tests last
-TESTS="testgit testauth testlink testremote testsuper teststray testengine testworker testsync testmultisync testhistory"
+TESTS="testgit testauth testlink testremote testsuper teststray testengine testworker testsync testmultisync testhistory teste2e"
 
 fail=0
 for t in $TESTS; do
