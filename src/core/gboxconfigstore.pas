@@ -28,7 +28,7 @@ uses
   Classes, SysUtils, fpjson, jsonparser;
 
 const
-  GOTBOX_VERSION = '0.1.0';
+  GOTBOX_VERSION = '0.5.0';
 
 type
   { Cached state for one mapped repo (root subfolder <-> GitHub repo). }

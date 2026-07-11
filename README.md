@@ -115,6 +115,39 @@ the Actions tab):
 | **Windows** | Setup `.exe` | Per-user install (Inno Setup); optional start-on-login shortcut. |
 | **macOS** | `.dmg` | Drag **GotBox** to *Applications*. Unsigned, so the **first** launch needs right-click → **Open**. |
 
+### Windows: allowing the app to run (unsigned)
+
+GotBox for Windows isn't code-signed yet, so Windows may warn or block it. There
+are **two different** protections, cleared differently:
+
+**1. SmartScreen warning** ("Windows protected your PC") — click **More info** →
+**Run anyway**. Also clear the "mark of the web" so it isn't re-flagged:
+
+- Downloaded `.zip`: right-click it → **Properties** → tick **Unblock** → **OK**
+  *before* extracting.
+- A single `.exe`: right-click → **Properties** → **Unblock**.
+
+**2. Attack Surface Reduction (ASR) block** — if instead you get a hard
+*permission / "blocked by your administrator"* error and **Run anyway doesn't
+help**, it's the ASR rule *"Block executable files from running unless they meet
+a prevalence, age, or trusted-list criterion"*
+(`01443614-cd74-433a-b99e-2ecdc07bfc25`). SmartScreen's Run-anyway can't override
+this — it needs an exclusion (admin) or a trusted signature:
+
+- **You control the PC:** in an **Administrator** PowerShell, allow the files:
+  ```powershell
+  Add-MpPreference -AttackSurfaceReductionOnlyExclusions "C:\Program Files\GotBox\gotbox.exe"
+  Add-MpPreference -AttackSurfaceReductionOnlyExclusions "C:\Program Files\GotBox\gotboxd.exe"
+  ```
+  (adjust the path to where you installed/unzipped GotBox).
+- **Managed/work PC:** your IT admin controls this rule — ask them to add the
+  above exclusion (by path or by the publisher once GotBox is signed), or to set
+  the rule to audit for you.
+
+Code signing is planned once the project qualifies for a **free OSS
+code-signing certificate** (which requires some adoption first); a trusted
+signature is what ultimately clears both protections without per-machine steps.
+
 ### Option 2 — build from source
 
 See [Building from source](#building-from-source).

@@ -2,8 +2,8 @@ name: Package
 
 # Builds the desktop installers and uploads them as workflow artifacts:
 #   Linux   -> .deb         (GUI gotbox + headless gotboxd, UPX-compressed)
-#   Windows -> Inno Setup .exe (no UPX: it trips Defender/SmartScreen on unsigned exes)
-#            + portable .zip (gotbox.exe + gotboxd.exe, no installer)
+#   Windows -> Inno Setup .exe (UPX-compressed; unsigned -- see the README for
+#              how to allow it to run past SmartScreen) + portable .zip
 #   macOS   -> .dmg         (GotBox.app with gotbox + gotboxd; no UPX)
 # Runs on main and on version tags; also on demand. Tag pushes (v*) additionally
 # attach the installers to a GitHub Release.
@@ -55,7 +55,7 @@ jobs:
           if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
             ver="${GITHUB_REF#refs/tags/v}"
           else
-            ver="1.0.0~git$(git rev-parse --short HEAD)"
+            ver="0.5.0~git$(git rev-parse --short HEAD)"
           fi
           echo "VERSION=$ver" >> "$GITHUB_ENV"
           echo "building version $ver"
@@ -145,6 +145,21 @@ jobs:
           mkdir -p lib/gotboxd
           fpc -O2 -Fusrc/core -FUlib/gotboxd -ogotboxd.exe gotboxd.lpr
 
+      - name: Install UPX
+        shell: pwsh
+        run: choco install upx -y --no-progress
+
+      # Shrinks the download. NOTE: run UPX BEFORE any future code-signing step
+      # (packing rewrites the PE and would void a signature). Unsigned + UPX is
+      # more likely to trip SmartScreen/Defender -- the README documents how
+      # users allow it to run until the app is signed.
+      - name: Compress binaries (UPX)
+        shell: bash
+        run: |
+          upx --best --lzma gotbox.exe gotboxd.exe
+          upx -t gotbox.exe
+          upx -t gotboxd.exe
+
       - name: Compute version
         shell: bash
         run: |
@@ -155,11 +170,11 @@ jobs:
           if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
             ver="${GITHUB_REF#refs/tags/v}"
           else
-            ver="1.0.0"
+            ver="0.5.0"
           fi
           # numeric a.b.c.d for the PE VersionInfo (Inno requires numeric)
           vernum="$(printf '%s' "$ver" | grep -oE '^[0-9]+(\.[0-9]+)*')"
-          [ -z "$vernum" ] && vernum="1.0.0"
+          [ -z "$vernum" ] && vernum="0.5.0"
           IFS='.' read -r a b c d <<< "$vernum"
           d="${d%%.*}"   # drop any 5th+ component (PE VersionInfo allows 4)
           vernum="${a:-1}.${b:-0}.${c:-0}.${d:-0}"
@@ -246,7 +261,7 @@ jobs:
           if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
             ver="${GITHUB_REF#refs/tags/v}"
           else
-            ver="1.0.0~git$(git rev-parse --short HEAD)"
+            ver="0.5.0~git$(git rev-parse --short HEAD)"
           fi
           echo "VERSION=$ver" >> "$GITHUB_ENV"
           echo "building version $ver"
