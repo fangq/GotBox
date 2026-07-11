@@ -49,7 +49,7 @@ VersionInfoProductVersion={#AppVersion}
 VersionInfoProductName={#AppName}
 VersionInfoCompany=Qianqian Fang
 VersionInfoDescription=GotBox Setup
-VersionInfoCopyright=(C) Qianqian Fang
+VersionInfoCopyright=(C) 2026 Qianqian Fang <fangqq at gmail.com>. GPLv3-or-later.
 
 [Tasks]
 Name: "autostart"; Description: "Start GotBox automatically at login (background)"; GroupDescription: "Startup:"

@@ -1,7 +1,7 @@
 # GotBox
 
 <p align="center">
-  <img src="assets/icons/128x128/gotbox.png" width="120" alt="GotBox">
+  <img src="assets/icons/gbox.svg" width="120" alt="GotBox">
 </p>
 
 [![CI](https://github.com/fangq/GotBox/actions/workflows/ci.yml/badge.svg)](https://github.com/fangq/GotBox/actions/workflows/ci.yml)
@@ -363,4 +363,9 @@ WARRANTY**; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
 A PARTICULAR PURPOSE. See the full license text in [`LICENSE.txt`](LICENSE.txt),
 or at <https://www.gnu.org/licenses/gpl-3.0.html>.
 
-Copyright © 2026 Qianqian Fang and the GotBox contributors.
+**Commercial licensing:** if the GPLv3's terms are incompatible with your
+intended use (for example, embedding GotBox in a closed-source or proprietary
+product), a separate commercial license is available — please contact the author
+to arrange one.
+
+Copyright © 2026 Qianqian Fang &lt;fangqq at gmail.com&gt;.
