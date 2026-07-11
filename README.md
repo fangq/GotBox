@@ -1,6 +1,11 @@
 # GotBox
 
+<p align="center">
+  <img src="assets/icons/128x128/gotbox.png" width="120" alt="GotBox">
+</p>
+
 [![CI](https://github.com/fangq/GotBox/actions/workflows/ci.yml/badge.svg)](https://github.com/fangq/GotBox/actions/workflows/ci.yml)
+[![License: GPL v3+](https://img.shields.io/badge/License-GPLv3--or--later-blue.svg)](LICENSE.txt)
 
 **Dropbox-like file sync for your own GitHub account.** GotBox keeps a folder on
 your computer in sync across all your machines — edit a file, and it's
@@ -31,6 +36,7 @@ GotBox runs quietly in the **system tray** and just works in the background.
 - [Troubleshooting](#troubleshooting)
 - [Building from source](#building-from-source)
 - [Contributing](#contributing)
+- [License](#license)
 
 ---
 
@@ -173,8 +179,19 @@ Right-click (or click) the tray icon:
 | **About** | Version and project link. |
 | **Quit** | Stop GotBox. |
 
-The tray icon is color-coded: grey = idle/paused, green = synced, blue =
-syncing, amber = conflict, red = error.
+### Tray icon states
+
+The tray icon is the GotBox "G-in-a-box", tinted to show the aggregate state of
+all your repos:
+
+| Icon | State | What it means |
+|:----:|-------|---------------|
+| 🟢 | **Synced** | Everything is committed, pushed, and up to date. |
+| 🔵 | **Syncing** | Committing, pushing, or pulling changes right now. |
+| 🟡 | **Conflict** | A file changed on two machines; both versions were kept — open **Status** to resolve. |
+| 🔴 | **Error** | A repo could not sync; open **Status** for details. |
+| ⚪ | **Idle / Paused** | Nothing to do, or syncing is paused. |
+| ⚫ | **Offline** | No network; changes are queued and sync resumes automatically. |
 
 ---
 
@@ -325,3 +342,18 @@ make format-check  # verify formatting (used by CI)
 
 Commit messages start with `[type] message`, type lower-case
 (e.g. `[feat]`, `[fix]`, `[build]`, `[docs]`, `[test]`).
+
+---
+
+## License
+
+GotBox is free software: you can redistribute it and/or modify it under the
+terms of the **GNU General Public License, version 3 or later (GPLv3-or-later)**
+as published by the Free Software Foundation.
+
+GotBox is distributed in the hope that it will be useful, but **WITHOUT ANY
+WARRANTY**; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+A PARTICULAR PURPOSE. See the full license text in [`LICENSE.txt`](LICENSE.txt),
+or at <https://www.gnu.org/licenses/gpl-3.0.html>.
+
+Copyright © 2026 Qianqian Fang and the GotBox contributors.
