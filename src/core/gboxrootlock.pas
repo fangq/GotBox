@@ -86,8 +86,15 @@ implementation
 
 uses
   Classes, SysUtils, DateUtils
-  {$IFDEF UNIX}, BaseUnix{$ENDIF}
-  {$IFDEF WINDOWS}, Windows{$ENDIF};
+  {$IFDEF UNIX}, BaseUnix{$ENDIF};
+
+{$IFDEF WINDOWS}
+// Declare the one WinAPI we need directly rather than `uses Windows`: that unit
+// redeclares GetEnvironmentVariable/DeleteFile (PChar-based) and would shadow
+// the SysUtils string versions this unit relies on.
+function GetCurrentProcessId: DWord; stdcall;
+  external 'kernel32' name 'GetCurrentProcessId';
+{$ENDIF}
 
 function NowUnix: Int64;
 begin
