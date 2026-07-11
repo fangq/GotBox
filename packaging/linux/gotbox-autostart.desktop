@@ -2,7 +2,7 @@
 Type=Application
 Name=GotBox
 Comment=Start GotBox file sync in the background
-Exec=gotbox -d
+Exec=env LAZUSEAPPIND=NO gotbox -d
 Icon=gotbox
 Terminal=false
 Categories=Utility;Network;

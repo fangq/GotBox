@@ -45,6 +45,8 @@ type
     FEngine: TSyncEngine;
     FLastAgg: TRepoState;
     FTrayShown: Boolean;   // has the tray icon been set at least once?
+    FStatusItem: TMenuItem;   // disabled top menu item mirroring the state (tray
+                              // tooltips are unreliable on Linux SNI/xfce)
     FIcons: array[TRepoState] of TIcon;
     FBootWatcher: TFileWatcher;
     // qualified: an LCL unit in the uses clause shadows TCriticalSection with
@@ -289,6 +291,15 @@ procedure TMainForm.BuildTrayMenu;
   end;
 
 begin
+  // A disabled status line at the top: the tray tooltip (Hint) is honoured on
+  // Windows but not by Linux StatusNotifier hosts (xfce), so the menu is the
+  // reliable place to show the current sync state on every desktop.
+  FStatusItem := TMenuItem.Create(TrayMenu);
+  FStatusItem.Caption := 'Status: starting...';
+  FStatusItem.Enabled := False;
+  TrayMenu.Items.Add(FStatusItem);
+  AddSep;
+
   AddItem('Open root folder', @mnuOpenRoot);
   AddItem('Link submodule...', @mnuLinkSub);
   AddItem('Sync now', @mnuSyncNow);
@@ -430,6 +441,7 @@ end;
 procedure TMainForm.UpdateTrayState;
 var
   agg: TRepoState;
+  s: string;
 begin
   agg := FStatus.AggregateState;
 
@@ -442,15 +454,18 @@ begin
     Exit;
 
   case agg of
-    rsError: TrayIcon.Hint := 'GotBox - error';
-    rsConflict: TrayIcon.Hint := 'GotBox - conflict';
-    rsSyncing: TrayIcon.Hint := 'GotBox - syncing';
-    rsPaused: TrayIcon.Hint := 'GotBox - paused';
-    rsOffline: TrayIcon.Hint := 'GotBox - offline (no network)';
-    rsIdle: TrayIcon.Hint := 'GotBox - idle (not syncing)';
+    rsError: s := 'error';
+    rsConflict: s := 'conflict';
+    rsSyncing: s := 'syncing';
+    rsPaused: s := 'paused';
+    rsOffline: s := 'offline (no network)';
+    rsIdle: s := 'idle (not syncing)';
     else
-      TrayIcon.Hint := 'GotBox - synced';
+      s := 'synced';
   end;
+  TrayIcon.Hint := 'GotBox - ' + s;               // honoured on Windows
+  if Assigned(FStatusItem) then                   // reliable everywhere (xfce/SNI)
+    FStatusItem.Caption := 'Status: ' + s;
 
   // swap the tray icon colour to match the aggregate state
   if Assigned(FIcons[agg]) then
@@ -1023,6 +1038,7 @@ var
   img: TImage;
   lbl: TLabel;
   btn: TButton;
+  i, best, bestW, big, bigW: Integer;
 begin
   f := TForm.CreateNew(nil);
   try
@@ -1030,7 +1046,7 @@ begin
     f.BorderStyle := bsDialog;
     f.Position := poScreenCenter;
     f.ClientWidth := 430;
-    f.ClientHeight := 340;
+    f.ClientHeight := 400;
 
     img := TImage.Create(f);         // brand icon
     img.Parent := f;
@@ -1038,7 +1054,33 @@ begin
     img.Stretch := True;
     img.Proportional := True;
     if Assigned(Application.Icon) and not Application.Icon.Empty then
-      img.Picture.Assign(Application.Icon);
+    begin
+      img.Picture.Icon.Assign(Application.Icon);
+      // Application.Icon's current frame is the tiny window/taskbar size; pick a
+      // high-res frame instead (the largest up to 128px) so the icon is crisp
+      // in this box rather than a small frame stretched up.
+      best := -1;
+      bestW := -1;
+      big := 0;
+      bigW := -1;
+      with img.Picture.Icon do
+        for i := 0 to Count - 1 do
+        begin
+          Current := i;
+          if Width > bigW then
+          begin
+            bigW := Width;
+            big := i;
+          end;
+          if (Width <= 128) and (Width > bestW) then
+          begin
+            bestW := Width;
+            best := i;
+          end;
+        end;
+      if best < 0 then best := big;   // no frame <=128: fall back to the largest
+      img.Picture.Icon.Current := best;
+    end;
 
     lbl := TLabel.Create(f);         // title
     lbl.Parent := f;
@@ -1056,13 +1098,17 @@ begin
 
     lbl := TLabel.Create(f);         // author / project / license
     lbl.Parent := f;
-    lbl.SetBounds(24, 104, 382, 190);
+    lbl.SetBounds(24, 104, 382, 250);
     lbl.WordWrap := True;
     lbl.AutoSize := False;
     lbl.Caption :=
+      'Lives in the system tray and keeps a folder in sync across your ' +
+      'machines using your own private git repositories -- edit locally, ' +
+      'auto-sync everywhere.' + LineEnding + LineEnding +
       'Author: Qianqian Fang <fangqq at gmail.com>' + LineEnding +
-      LineEnding + 'Project: https://github.com/fangq/GotBox' +
-      LineEnding + LineEnding +
+      'Project: https://github.com/fangq/GotBox' + LineEnding +
+      'Issues: https://github.com/fangq/GotBox/issues' + LineEnding +
+      LineEnding +
       'License: GNU General Public License, version 3 or later (GPLv3+).' +
       LineEnding + 'Distributed WITHOUT ANY WARRANTY; see LICENSE.txt.' +
       LineEnding + LineEnding +

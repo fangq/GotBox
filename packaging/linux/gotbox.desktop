@@ -3,7 +3,7 @@ Type=Application
 Name=GotBox
 GenericName=File Sync
 Comment=Dropbox-like file sync over GitHub private repos
-Exec=gotbox
+Exec=env LAZUSEAPPIND=NO gotbox
 Icon=gotbox
 Terminal=false
 Categories=Utility;Network;FileTransfer;
