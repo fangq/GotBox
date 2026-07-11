@@ -97,8 +97,7 @@ end;
   Does not descend into a found repo or into .git, so it stops at repo
   boundaries and finds nested strays (e.g. resubmission/draft), not just
   top-level ones. }
-procedure CollectEmbeddedRepos(const ABase, ARel: string;
-  ASubm, AOut: TStrings);
+procedure CollectEmbeddedRepos(const ABase, ARel: string; ASubm, AOut: TStrings);
 var
   sr: TSearchRec;
   full, rel: string;
@@ -147,7 +146,8 @@ begin
   // .git/info/exclude path anyway).
   if not DirectoryExists(root2 + '.git') then Exit;
   subm := TStringList.Create;        // registered submodule paths (legit gitlinks)
-  subNames := TStringList.Create;    // their .gitmodules section names (parallel to subm)
+  subNames := TStringList.Create;
+  // their .gitmodules section names (parallel to subm)
   tracked := TStringList.Create;     // stray gitlinks tracked in the index -> unstage
   embedded := TStringList.Create;    // folders that still have a .git -> exclude
   excl := TStringList.Create;
@@ -164,8 +164,8 @@ begin
         subm.Add(Trim(Copy(excl[i], sp + 1, MaxInt)));
         key := Trim(Copy(excl[i], 1, sp - 1));   // submodule.<name>.path
         if (Length(key) > Length('submodule.') + Length('.path')) then
-          subNames.Add(Copy(key, Length('submodule.') + 1,
-            Length(key) - Length('submodule.') - Length('.path')))
+          subNames.Add(Copy(key, Length('submodule.') + 1, Length(key) -
+            Length('submodule.') - Length('.path')))
         else
           subNames.Add('');
       end;

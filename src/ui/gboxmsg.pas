@@ -124,7 +124,7 @@ begin
     Result := 0;   // xfconf-query missing or no xsettings channel
   end;
 end;
-{$ELSE}
+  {$ELSE}
 begin
   Result := 0;
 end;

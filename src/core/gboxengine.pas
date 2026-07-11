@@ -80,7 +80,8 @@ var
   sr: TSearchRec;
 begin
   Result := False;
-  if FindFirst(IncludeTrailingPathDelimiter(APath) + AllFilesMask, faAnyFile, sr) = 0 then
+  if FindFirst(IncludeTrailingPathDelimiter(APath) + AllFilesMask,
+    faAnyFile, sr) = 0 then
   begin
     try
       repeat
@@ -179,8 +180,8 @@ begin
   // worker will unlink it (drop the gitlink + .gitmodules entry) on its next
   // cycle. Only auto-check-out submodules that were never populated on this
   // machine (a fresh clone / a gitlink that arrived via a pull).
-  if DirectoryExists(IncludeTrailingPathDelimiter(FCfg.RootDir) + '.git' +
-    PathDelim + 'modules' + PathDelim + SetDirSeparators(AName)) then
+  if DirectoryExists(IncludeTrailingPathDelimiter(FCfg.RootDir) +
+    '.git' + PathDelim + 'modules' + PathDelim + SetDirSeparators(AName)) then
     Exit(False);
   if Assigned(Log) then
     Log.Info('engine', 'checking out submodule ' + AName);
@@ -191,8 +192,8 @@ begin
     // --init populates a registered-but-uninitialized submodule; the submodule
     // name/path uses forward slashes as stored in .gitmodules. protocol.file.allow
     // keeps file:// remotes (local/tests) working, matching the "add" path.
-    r := git.Git(['-c', 'protocol.file.allow=always', 'submodule', 'update',
-      '--init', '--', AName]);
+    r := git.Git(['-c', 'protocol.file.allow=always', 'submodule',
+      'update', '--init', '--', AName]);
 
     // git refuses to clone a submodule into a non-empty directory. If the local
     // folder holds unrelated content (e.g. this path was a plain folder here
@@ -204,8 +205,8 @@ begin
       path := LocalPathOf(AName);
       if DirectoryExists(path) and DirHasEntries(path) then
       begin
-        backupRoot := IncludeTrailingPathDelimiter(FCfg.RootDir) + '.git' +
-          PathDelim + 'gotbox-backups';
+        backupRoot := IncludeTrailingPathDelimiter(FCfg.RootDir) +
+          '.git' + PathDelim + 'gotbox-backups';
         ForceDirectories(backupRoot);
         backup := IncludeTrailingPathDelimiter(backupRoot) +
           StringReplace(AName, '/', '_', [rfReplaceAll]) + '-' +
