@@ -180,12 +180,14 @@ jobs:
                   "/DSrcDir=$($PWD.Path)" "packaging\windows\gotbox.iss"
           Get-ChildItem dist
 
-      - name: Build portable .zip (no installer)
+      - name: Stage portable files + build .zip (for the release asset)
         shell: pwsh
         run: |
           $stage = "gotbox-$env:VERSION-win64"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item gotbox.exe, gotboxd.exe, README.md $stage
+          # A real single .zip -- attached AS-IS to a release (release assets are
+          # not re-wrapped), so release downloaders get one usable archive.
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Compress-Archive -Path "$stage\*" `
             -DestinationPath "dist\gotbox-$env:VERSION-win64.zip" -Force
@@ -197,10 +199,14 @@ jobs:
           path: dist/*.exe
           if-no-files-found: error
 
+      # Upload the STAGED FILES, not the .zip: upload-artifact always wraps its
+      # contents in a zip, so uploading a .zip yields a zip-inside-a-zip. Windows
+      # Explorer can't extract files out of a nested archive (error 0x80004005),
+      # so hand GitHub the loose files and let it produce a single, usable zip.
       - uses: actions/upload-artifact@v4
         with:
-          name: gotbox-windows-zip
-          path: dist/*.zip
+          name: gotbox-windows-portable
+          path: gotbox-*-win64/*
           if-no-files-found: error
 
       - name: Attach to release (tags only)
