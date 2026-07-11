@@ -1,6 +1,6 @@
 {
   GotBox -- Dropbox-like file sync over your own private git repositories.
-  Copyright (C) 2026 Qianqian Fang <q.fang@northeastern.edu> and contributors.
+  Copyright (C) 2026 Qianqian Fang <fangqq at gmail.com>.
 
   This program is free software: you can redistribute it and/or modify it under
   the terms of the GNU General Public License as published by the Free Software
@@ -27,7 +27,7 @@ interface
 
 uses
   Classes, SysUtils, SyncObjs, Forms, Controls, Graphics, Menus, ExtCtrls,
-  Dialogs, LCLType, LCLIntf, IntfGraphics, GraphType, fpimage,
+  StdCtrls, Dialogs, LCLType, LCLIntf, IntfGraphics, GraphType, fpimage,
   gboxconfigstore, gboxstatusmodel, gboxlog,
   gboxcredstore, gboxengine, gboxsuper, gboxfilewatcher, gboxrootlock, gboxmsg;
 
@@ -53,6 +53,8 @@ type
     FNotes: TStringList;                     // each line: title <TAB> body
     FLockToken: string;                      // our root-lock identity for this run
     FLockTimer: TTimer;                      // root-lock heartbeat + takeover watchdog
+    FPendingToken: string;
+    // token handed to DoCreateEngine (main thread)
     {$IFDEF LINUX}
     FScaleTimer: TTimer;                     // polls desktop scale for live HiDPI refresh
     procedure ScaleTick(Sender: TObject);
@@ -69,6 +71,12 @@ type
     procedure StatusModelChanged;
     procedure StartEngine;
     procedure StopEngine;
+    procedure BringUp;
+    // heavy startup work (runs off the GUI thread)
+    procedure RunOnMain(AMethod: TThreadMethod);
+    procedure DoStopEngine;                  // FEngine lifecycle -- main thread only
+    procedure DoCreateEngine;
+    procedure EnableLockTimer;
     procedure MaybePromptLogin;
     procedure StartupTasks(Data: PtrInt);
     procedure Notify(const ATitle, AMsg: string);
@@ -103,6 +111,29 @@ implementation
 
 uses
   gboxconfig, gboxlogin, gboxstatus, gboxlinksub;
+
+type
+  { One-shot worker that runs the heavy startup bring-up off the GUI thread. }
+  TBringUpThread = class(TThread)
+  private
+    FForm: TMainForm;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AForm: TMainForm);
+  end;
+
+constructor TBringUpThread.Create(AForm: TMainForm);
+begin
+  FForm := AForm;
+  FreeOnTerminate := True;
+  inherited Create(False);   // run now
+end;
+
+procedure TBringUpThread.Execute;
+begin
+  FForm.BringUp;
+end;
 
 {$IFDEF LCLGtk2}
 // The gtk2/ayatana tray backend publishes each status icon as a fresh flat file
@@ -208,9 +239,10 @@ begin
       if ConfigForm.Edit(FConfig) then
         FStore.Save(FConfig);
 
-    StartEngine;    // begin syncing if the .gotbox root already exists
-    TryBootstrap;   // clone an existing remote, or create from local content
-    StartBootWatch; // watch for content appearing later (event-driven)
+    // Prompts are done (main thread); run the slow bring-up (clone / reconcile /
+    // engine start) on a worker thread so the tray menu stays responsive during
+    // the first sync. FEngine is still created only on the main thread.
+    TBringUpThread.Create(Self);
   except
     on E: Exception do
       if Assigned(Log) then Log.Error('app', 'startup tasks failed: ' + E.Message);
@@ -493,33 +525,73 @@ begin
   Result := True;
 end;
 
+{ Run AMethod on the GUI thread: directly if we are already there, else marshal
+  via Synchronize. Lets StartEngine run its slow git/network work on a worker
+  thread while every FEngine/LCL touch still happens on the main thread. }
+procedure TMainForm.RunOnMain(AMethod: TThreadMethod);
+begin
+  if GetCurrentThreadID = MainThreadID then AMethod()
+  else
+    TThread.Synchronize(nil, AMethod);
+end;
+
+procedure TMainForm.DoStopEngine;   // main thread only (via RunOnMain)
+begin
+  if Assigned(FEngine) then
+    FreeAndNil(FEngine);   // TSyncEngine.Destroy stops + joins the workers
+end;
+
+procedure TMainForm.EnableLockTimer;   // main thread only (TTimer is LCL)
+begin
+  FLockTimer.Enabled := True;
+end;
+
+procedure TMainForm.DoCreateEngine;   // main thread only: FEngine + timer
+begin
+  DoStopEngine;
+  FEngine := TSyncEngine.Create(FConfig, FPendingToken, FStatus);
+  FEngine.OnNotice := @HandleSyncNotice;   // set before Start so workers pick it up
+  FEngine.Start;
+  FLockTimer.Enabled := True;   // heartbeat the lock + watch for a takeover
+end;
+
+{ Bring the sync engine up. The slow parts (root lock, remote validation, and
+  the .gotbox clone/reconcile) run on whatever thread calls this -- at startup
+  that is a worker thread, so the tray stays responsive during the first sync --
+  while the engine object itself is only ever created/freed on the main thread
+  (via RunOnMain), so menu handlers never race a half-freed FEngine. }
 procedure TMainForm.StartEngine;
 var
   token, err, detail: string;
   lockOwner: TLockOwner;
+  takeover: Boolean;
 begin
-  StopEngine;
+  RunOnMain(@DoStopEngine);
   // only run once the .gotbox root has been set up locally
   if not IsGitWorkTree(FConfig.RootDir) then Exit;
 
   // Cross-machine lock: never drive a root another GotBox instance is already
   // managing (the shared-folder hazard). If another owns it, ask before taking
-  // over; if the user declines, stand by (the timer retries when it frees).
+  // over; if the user declines, stand by (the timer retries when it frees). The
+  // prompt is only possible on the main thread -- off it, just stand by.
   if FLockToken = '' then FLockToken := NewLockToken;
   if AcquireRootLock(FConfig.RootDir, FConfig.MachineName, FLockToken,
     False, lockOwner) = arHeldByOther then
   begin
-    if MessageDlg('GotBox', Format(
-      'This folder is already being managed by GotBox on "%s".' +
-      LineEnding + LineEnding +
-      'Take over here? That machine will pause syncing this folder.',
-      [lockOwner.Machine]), mtWarning, [mbYes, mbNo], 0) = mrYes then
+    takeover := False;
+    if GetCurrentThreadID = MainThreadID then
+      takeover := MessageDlg('GotBox', Format(
+        'This folder is already being managed by GotBox on "%s".' +
+        LineEnding + LineEnding +
+        'Take over here? That machine will pause syncing this folder.',
+        [lockOwner.Machine]), mtWarning, [mbYes, mbNo], 0) = mrYes;
+    if takeover then
       AcquireRootLock(FConfig.RootDir, FConfig.MachineName, FLockToken, True, lockOwner)
     else
     begin
       if Assigned(FStatus) then
         FStatus.SetState(GOTBOX_REPO, rsPaused, 'managed by ' + lockOwner.Machine);
-      FLockTimer.Enabled := True;   // keep watching; resume if it is released
+      RunOnMain(@EnableLockTimer);   // keep watching; resume if it is released
       Exit;
     end;
   end;
@@ -540,10 +612,24 @@ begin
     if Assigned(Log) then
       Log.Warn('engine', 'root reconcile: ' + detail);   // proceed anyway
 
-  FEngine := TSyncEngine.Create(FConfig, token, FStatus);
-  FEngine.OnNotice := @HandleSyncNotice;   // set before Start so workers pick it up
-  FEngine.Start;
-  FLockTimer.Enabled := True;   // heartbeat the lock + watch for a takeover
+  FPendingToken := token;
+  RunOnMain(@DoCreateEngine);   // create + start the engine on the main thread
+end;
+
+{ Heavy startup bring-up, run on a worker thread so the tray menu is responsive
+  during the initial sync/clone. FEngine is still only touched on the main
+  thread (StartEngine/TryBootstrap marshal via RunOnMain). }
+procedure TMainForm.BringUp;
+begin
+  try
+    StartEngine;                      // starts the engine if the root is set up
+    if not Assigned(FEngine) then     // root not set up yet -> clone/create it
+      TryBootstrap;
+    StartBootWatch;                   // watch for content appearing later
+  except
+    on E: Exception do
+      if Assigned(Log) then Log.Error('app', 'bring-up failed: ' + E.Message);
+  end;
 end;
 
 { Root-lock heartbeat + takeover watchdog (every LOCK_HEARTBEAT_SEC). While the
@@ -584,8 +670,7 @@ end;
 
 procedure TMainForm.StopEngine;
 begin
-  if Assigned(FEngine) then
-    FreeAndNil(FEngine);   // TSyncEngine.Destroy stops + joins the workers
+  RunOnMain(@DoStopEngine);   // FEngine is only ever freed on the main thread
 end;
 
 { At startup, if the GitHub backend is selected but the username or token is
@@ -933,10 +1018,70 @@ begin
 end;
 
 procedure TMainForm.mnuAbout(Sender: TObject);
+var
+  f: TForm;
+  img: TImage;
+  lbl: TLabel;
+  btn: TButton;
 begin
-  MsgInfo('GotBox ' + GOTBOX_VERSION + LineEnding + LineEnding +
-    'Edit locally, auto-sync everywhere via private GitHub repos.' +
-    LineEnding + LineEnding + 'https://github.com/fangq/GotBox');
+  f := TForm.CreateNew(nil);
+  try
+    f.Caption := 'About GotBox';
+    f.BorderStyle := bsDialog;
+    f.Position := poScreenCenter;
+    f.ClientWidth := 430;
+    f.ClientHeight := 340;
+
+    img := TImage.Create(f);         // brand icon
+    img.Parent := f;
+    img.SetBounds(24, 20, 64, 64);
+    img.Stretch := True;
+    img.Proportional := True;
+    if Assigned(Application.Icon) and not Application.Icon.Empty then
+      img.Picture.Assign(Application.Icon);
+
+    lbl := TLabel.Create(f);         // title
+    lbl.Parent := f;
+    lbl.SetBounds(104, 22, 300, 26);
+    lbl.Font.Style := [fsBold];
+    lbl.Font.Height := -18;
+    lbl.Caption := 'GotBox ' + GOTBOX_VERSION;
+
+    lbl := TLabel.Create(f);         // tagline
+    lbl.Parent := f;
+    lbl.SetBounds(104, 52, 300, 34);
+    lbl.WordWrap := True;
+    lbl.AutoSize := False;
+    lbl.Caption := 'Dropbox-like file sync over your own private git repositories.';
+
+    lbl := TLabel.Create(f);         // author / project / license
+    lbl.Parent := f;
+    lbl.SetBounds(24, 104, 382, 190);
+    lbl.WordWrap := True;
+    lbl.AutoSize := False;
+    lbl.Caption :=
+      'Author: Qianqian Fang <fangqq at gmail.com>' + LineEnding +
+      LineEnding + 'Project: https://github.com/fangq/GotBox' +
+      LineEnding + LineEnding +
+      'License: GNU General Public License, version 3 or later (GPLv3+).' +
+      LineEnding + 'Distributed WITHOUT ANY WARRANTY; see LICENSE.txt.' +
+      LineEnding + LineEnding +
+      'Commercial use: if the GPLv3 conflicts with your use (e.g. embedding ' +
+      'in closed-source software), contact the author for a separate ' +
+      'commercial license.';
+
+    btn := TButton.Create(f);
+    btn.Parent := f;
+    btn.Caption := 'OK';
+    btn.ModalResult := mrOK;
+    btn.Default := True;
+    btn.SetBounds(f.ClientWidth - 106, f.ClientHeight - 40, 90, 30);
+
+    ScaleFormUp(f);   // match the desktop's HiDPI scale (gboxmsg helper)
+    f.ShowModal;
+  finally
+    f.Free;
+  end;
 end;
 
 procedure TMainForm.mnuQuit(Sender: TObject);

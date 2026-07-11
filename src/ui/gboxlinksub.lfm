@@ -1,11 +1,11 @@
 object LinkSubForm: TLinkSubForm
   Left = 0
-  Height = 280
+  Height = 300
   Top = 0
   Width = 460
   BorderStyle = bsDialog
   Caption = 'GotBox - Link submodule'
-  ClientHeight = 280
+  ClientHeight = 300
   ClientWidth = 460
   Position = poScreenCenter
   LCLVersion = '4.2.0.0'
@@ -73,7 +73,7 @@ object LinkSubForm: TLinkSubForm
   object btnOK: TButton
     Left = 280
     Height = 32
-    Top = 240
+    Top = 262
     Width = 80
     Caption = 'Link'
     Default = True
@@ -83,7 +83,7 @@ object LinkSubForm: TLinkSubForm
   object btnCancel: TButton
     Left = 368
     Height = 32
-    Top = 240
+    Top = 262
     Width = 72
     Cancel = True
     Caption = 'Cancel'
