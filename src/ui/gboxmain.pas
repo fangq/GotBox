@@ -29,7 +29,7 @@ uses
   Classes, SysUtils, SyncObjs, Forms, Controls, Graphics, Menus, ExtCtrls,
   Dialogs, LCLType, LCLIntf, IntfGraphics, GraphType, fpimage,
   gboxconfigstore, gboxstatusmodel, gboxlog,
-  gboxcredstore, gboxengine, gboxsuper, gboxfilewatcher, gboxmsg;
+  gboxcredstore, gboxengine, gboxsuper, gboxfilewatcher, gboxrootlock, gboxmsg;
 
 type
   TMainForm = class(TForm)
@@ -51,10 +51,13 @@ type
     // the System record type, so name it from SyncObjs explicitly
     FNoteLock: SyncObjs.TCriticalSection;   // queue of pending notices (worker->GUI)
     FNotes: TStringList;                     // each line: title <TAB> body
+    FLockToken: string;                      // our root-lock identity for this run
+    FLockTimer: TTimer;                      // root-lock heartbeat + takeover watchdog
     {$IFDEF LINUX}
     FScaleTimer: TTimer;                     // polls desktop scale for live HiDPI refresh
     procedure ScaleTick(Sender: TObject);
     {$ENDIF}
+    procedure LockTick(Sender: TObject);
     procedure TryBootstrap;
     procedure BootWatchChanged(Sender: TObject);
     procedure StartBootWatch;
@@ -117,6 +120,7 @@ begin
   gtk_icon_theme_rescan_if_needed(gtk_icon_theme_get_default);
 end;
 {$ELSE}
+
 procedure RefreshTrayIconTheme;
 begin
 end;
@@ -165,6 +169,13 @@ begin
   FScaleTimer.Enabled := True;
   {$ENDIF}
 
+  // Root-lock heartbeat + takeover watchdog (enabled once the engine starts, or
+  // while standing by for another machine to release the folder).
+  FLockTimer := TTimer.Create(Self);
+  FLockTimer.Interval := LOCK_HEARTBEAT_SEC * 1000;
+  FLockTimer.OnTimer := @LockTick;
+  FLockTimer.Enabled := False;
+
   // Defer first-run prompts + engine start until the message loop is running.
   // Showing a modal dialog from inside FormCreate (before Application.Run) is
   // unreliable on gtk2 and can crash; QueueAsyncCall runs this once we're live.
@@ -212,8 +223,11 @@ begin
   {$IFDEF LINUX}
   if Assigned(FScaleTimer) then FScaleTimer.Enabled := False;
   {$ENDIF}
+  if Assigned(FLockTimer) then FLockTimer.Enabled := False;
   StopBootWatch;
   StopEngine;        // stop worker threads before freeing the status model
+  if FLockToken <> '' then
+    ReleaseRootLock(FConfig.RootDir, FLockToken);   // free the lock for others
   FStatus.Free;
   FConfig.Free;
   FStore.Free;
@@ -258,17 +272,17 @@ end;
 
 procedure TMainForm.BuildIcons;
 
-  // A flat, single-tone isometric box whose body colour encodes the status, with
-  // a constant light "G" traced along the cube's own edges (the geometry is
-  // lifted from assets/icons/gbox.svg; see tools/make-icon.py). Flat (not shaded)
-  // so the G stays legible at the ~22-24px the tray renders at. Transparency is
-  // done with a colour key -- LCL canvas drawing is aliased, so keying is clean.
+// A flat, single-tone isometric box whose body colour encodes the status, with
+// a constant light "G" traced along the cube's own edges (the geometry is
+// lifted from assets/icons/gbox.svg; see tools/make-icon.py). Flat (not shaded)
+// so the G stays legible at the ~22-24px the tray renders at. Transparency is
+// done with a colour key -- LCL canvas drawing is aliased, so keying is clean.
   function MakeBox(AColor: TColor): TIcon;
   const
-    SZ  = 48;                    // render at 2x so the panel scales DOWN (crisp);
-                                 // a 24px source gets upscaled to panel height and
-                                 // the thin G blurs into a solid block
-    MG  = 0.09;                  // margin so the G stroke isn't clipped
+    SZ = 48;                    // render at 2x so the panel scales DOWN (crisp);
+    // a 24px source gets upscaled to panel height and
+    // the thin G blurs into a solid block
+    MG = 0.09;                  // margin so the G stroke isn't clipped
     KEY = TColor($00FE00FE);     // transparent colour-key (not used by any face)
     GCOL = TColor($00EDEDED);    // constant light "G" (#ededed)
   var
@@ -289,8 +303,13 @@ procedure TMainForm.BuildIcons;
 
   begin
     // normalized cube vertices (top / upper-left / upper-right / centre / ...)
-    top := Q(0.5, 0.0);  ul := Q(0.0, 0.25); ur := Q(1.0, 0.25); cc := Q(0.5, 0.5);
-    ll  := Q(0.0, 0.75); lr := Q(1.0, 0.75); bot := Q(0.5, 1.0);
+    top := Q(0.5, 0.0);
+    ul := Q(0.0, 0.25);
+    ur := Q(1.0, 0.25);
+    cc := Q(0.5, 0.5);
+    ll := Q(0.0, 0.75);
+    lr := Q(1.0, 0.75);
+    bot := Q(0.5, 1.0);
     gw := SZ div 8;
     if gw < 2 then gw := 2;
 
@@ -477,10 +496,34 @@ end;
 procedure TMainForm.StartEngine;
 var
   token, err, detail: string;
+  lockOwner: TLockOwner;
 begin
   StopEngine;
   // only run once the .gotbox root has been set up locally
   if not IsGitWorkTree(FConfig.RootDir) then Exit;
+
+  // Cross-machine lock: never drive a root another GotBox instance is already
+  // managing (the shared-folder hazard). If another owns it, ask before taking
+  // over; if the user declines, stand by (the timer retries when it frees).
+  if FLockToken = '' then FLockToken := NewLockToken;
+  if AcquireRootLock(FConfig.RootDir, FConfig.MachineName, FLockToken,
+    False, lockOwner) = arHeldByOther then
+  begin
+    if MessageDlg('GotBox', Format(
+      'This folder is already being managed by GotBox on "%s".' +
+      LineEnding + LineEnding +
+      'Take over here? That machine will pause syncing this folder.',
+      [lockOwner.Machine]), mtWarning, [mbYes, mbNo], 0) = mrYes then
+      AcquireRootLock(FConfig.RootDir, FConfig.MachineName, FLockToken, True, lockOwner)
+    else
+    begin
+      if Assigned(FStatus) then
+        FStatus.SetState(GOTBOX_REPO, rsPaused, 'managed by ' + lockOwner.Machine);
+      FLockTimer.Enabled := True;   // keep watching; resume if it is released
+      Exit;
+    end;
+  end;
+
   if not PrepareRemote(token, err) then
   begin
     if Assigned(Log) then Log.Warn('engine', 'sync not started: ' + err);
@@ -500,6 +543,43 @@ begin
   FEngine := TSyncEngine.Create(FConfig, token, FStatus);
   FEngine.OnNotice := @HandleSyncNotice;   // set before Start so workers pick it up
   FEngine.Start;
+  FLockTimer.Enabled := True;   // heartbeat the lock + watch for a takeover
+end;
+
+{ Root-lock heartbeat + takeover watchdog (every LOCK_HEARTBEAT_SEC). While the
+  engine runs, refresh our lock and, if another machine took the folder over,
+  pause here. While standing by (engine not running because another machine
+  held the lock), resume automatically once the folder is released. }
+procedure TMainForm.LockTick(Sender: TObject);
+var
+  lockOwner: TLockOwner;
+begin
+  if FLockToken = '' then Exit;
+  if not IsGitWorkTree(FConfig.RootDir) then Exit;
+  if Assigned(FEngine) then
+  begin
+    if StillRootOwner(FConfig.RootDir, FLockToken) then
+      RefreshRootLock(FConfig.RootDir, FConfig.MachineName, FLockToken)
+    else
+    begin
+      // another machine took over -> pause so two never drive one tree at once
+      StopEngine;
+      if Assigned(FStatus) then
+        FStatus.SetState(GOTBOX_REPO, rsPaused, 'another machine took over');
+      Notify('GotBox - paused',
+        'Another machine took over this folder; syncing is paused here.');
+    end;
+  end
+  else
+  begin
+    // standing by: take the folder back as soon as it is free/stale
+    if AcquireRootLock(FConfig.RootDir, FConfig.MachineName, FLockToken,
+      False, lockOwner) = arAcquired then
+    begin
+      Notify('GotBox', 'This folder is free again; resuming sync here.');
+      StartEngine;
+    end;
+  end;
 end;
 
 procedure TMainForm.StopEngine;

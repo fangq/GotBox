@@ -34,6 +34,8 @@ interface
 function WantDaemon: Boolean;
 { True if -h / --help (or -?) was passed. }
 function WantHelp: Boolean;
+{ True if --takeover was passed (take over a root another instance manages). }
+function WantTakeover: Boolean;
 { Help/usage text for --help. }
 function UsageText: string;
 
@@ -79,6 +81,11 @@ begin
   Result := HasArg('-h', '--help') or HasArg('-?', '--help');
 end;
 
+function WantTakeover: Boolean;
+begin
+  Result := HasArg('--takeover', '--takeover');
+end;
+
 function UsageText: string;
 begin
   Result :=
@@ -86,11 +93,11 @@ begin
     LineEnding + LineEnding + 'Usage: gotbox [options]' + LineEnding +
     LineEnding + 'Options:' + LineEnding +
     '  -d, --daemon   detach from the terminal and run in the background' +
-    LineEnding + '  -h, --help     show this help and exit' + LineEnding +
-    LineEnding +
+    LineEnding + '  --takeover     take over a root another GotBox instance is managing'
+    + LineEnding + '  -h, --help     show this help and exit' +
+    LineEnding + LineEnding +
     'For a headless host or a plain SSH session (no X display), use the ' +
-    'GUI-free' + LineEnding +
-    'daemon instead:  gotboxd [-d]' + LineEnding;
+    'GUI-free' + LineEnding + 'daemon instead:  gotboxd [-d]' + LineEnding;
 end;
 
 {$IFDEF UNIX}

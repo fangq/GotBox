@@ -288,6 +288,13 @@ On Windows the GUI is already console-detached, so `-d` is a no-op.
 - **A folder shows as a broken "link" on GitHub** — that folder is itself a git
   repo. Either link it properly via **Link submodule…**, or remove its inner
   `.git` to sync it as plain files.
+- **"This folder is already managed by GotBox on ‹machine›"** — GotBox keeps one
+  instance managing a given root at a time (important if the root lives on a
+  shared/network folder). The GUI offers to **take over** (the other machine
+  then pauses that folder); the headless `gotboxd` refuses unless you pass
+  **`--takeover`**. A crashed instance's claim is reclaimed automatically after
+  ~90 s. The intended setup is still one **local** copy per machine synced via
+  the remote — not two machines sharing one working tree.
 - **Tray icon looks like a generic gear (Linux, StatusNotifier panels)** — some
   desktops can't render the dynamically drawn icon. Installing via the `.deb`
   (which registers a themed icon) helps; otherwise the colored square shows on

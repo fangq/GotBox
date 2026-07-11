@@ -39,13 +39,13 @@ implementation
 uses
   Classes, SysUtils,
   {$IFDEF UNIX}BaseUnix, ctypes,{$ENDIF}
-  gboxlog, gboxconfigstore, gboxcredstore, gboxstatusmodel,
-  gboxsuper, gboxengine;
+  gboxdaemon, gboxlog, gboxconfigstore, gboxcredstore, gboxstatusmodel,
+  gboxsuper, gboxengine, gboxrootlock;
 
-{$IFDEF UNIX}
 var
   GQuit: Boolean = False;
 
+{$IFDEF UNIX}
 procedure HandleStop(sig: cint); cdecl;
 begin
   GQuit := True;
@@ -96,7 +96,9 @@ var
   cfg: TGotConfig;
   status: TStatusModel;
   engine: TSyncEngine;
-  token, err, detail: string;
+  token, err, detail, lockTok: string;
+  owner: TLockOwner;
+  hbTicks: Integer;
 begin
   Result := 0;
   InitLogger(IncludeTrailingPathDelimiter(GotDataDir) + 'gotbox.log');
@@ -127,6 +129,22 @@ begin
       Exit(1);
     end;
 
+    // Cross-machine lock: never drive a working tree another GotBox instance is
+    // already managing (the case that risks git corruption on a shared root).
+    lockTok := NewLockToken;
+    case AcquireRootLock(cfg.RootDir, cfg.MachineName, lockTok, WantTakeover, owner) of
+      arHeldByOther:
+      begin
+        Log.Error('lock', Format('this folder is already managed by GotBox on ' +
+          '"%s" (host %s, pid %d); run with --takeover to take over',
+          [owner.Machine, owner.Host, owner.Pid]));
+        Exit(2);
+      end;
+      arAcquired:
+        if owner.Valid and (owner.Token <> lockTok) then
+          Log.Warn('lock', Format('took over the folder from "%s"', [owner.Machine]));
+    end;
+
     // recreate/resurrect the remote root if needed (proceed anyway on failure)
     if not EnsureGotboxRoot(cfg, token, detail) then
       Log.Warn('app', 'root reconcile: ' + detail);
@@ -136,23 +154,36 @@ begin
     engine.Start;
     Log.Info('app', 'headless sync running; send SIGTERM/SIGINT to stop');
 
-    // CheckSynchronize (not plain Sleep) so queued cross-thread callbacks run
-    // on this main thread: the engine marshals its submodule reconcile via
-    // TThread.Queue (the GUI build gets this from Application.Run), so without a
-    // pump here gotboxd would never react to a submodule added/removed on
-    // another machine while it keeps running.
     {$IFDEF UNIX}
     FpSignal(SIGTERM, @HandleStop);
     FpSignal(SIGINT, @HandleStop);
-    while not GQuit do
-      CheckSynchronize(250);
-    Log.Info('app', 'stop signal received; shutting down');
-    {$ELSE}
-    // no POSIX signals: block indefinitely (stopped by killing the process)
-    while True do
-      CheckSynchronize(1000);
     {$ENDIF}
+    // CheckSynchronize (not plain Sleep) pumps the engine's submodule reconcile,
+    // which it marshals via TThread.Queue (the GUI build gets this from
+    // Application.Run). Every LOCK_HEARTBEAT_SEC we also refresh the root lock
+    // and confirm we still hold it -- if another instance took the folder over,
+    // stop, so the two never drive one working tree at once.
+    hbTicks := 0;
+    while not GQuit do
+    begin
+      CheckSynchronize(250);
+      Inc(hbTicks);
+      if hbTicks >= (LOCK_HEARTBEAT_SEC * 1000) div 250 then
+      begin
+        hbTicks := 0;
+        if StillRootOwner(cfg.RootDir, lockTok) then
+          RefreshRootLock(cfg.RootDir, cfg.MachineName, lockTok)
+        else
+        begin
+          Log.Warn('lock',
+            'another GotBox instance took over this folder; stopping');
+          GQuit := True;
+        end;
+      end;
+    end;
+    Log.Info('app', 'stopping; shutting down');
   finally
+    ReleaseRootLock(cfg.RootDir, lockTok);   // free the lock before cfg is gone
     engine.Free;   // TSyncEngine.Destroy stops + joins the workers (nil-safe)
     status.Free;
     cfg.Free;

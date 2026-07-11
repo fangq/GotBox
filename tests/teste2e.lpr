@@ -33,14 +33,14 @@ program teste2e;
 {$mode objfpc}{$H+}
 
 uses
-  {$IFDEF UNIX}cthreads,{$ENDIF}
+  {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
   SysUtils, Classes, Process,
-  gboxconfigstore, gboxgitrunner, gboxsuper;
+  gboxconfigstore, gboxgitrunner, gboxsuper, gboxrootlock;
 
 var
   failures: Integer = 0;
   base, gotboxd, emptyGitCfg: string;
-  proc1, proc2: TProcess;
+  proc1, proc2, proc3: TProcess;
 
   procedure Check(ACond: Boolean; const AName: string);
   begin
@@ -140,11 +140,13 @@ var
   end;
 
   { Launch a real gotboxd (foreground, so TProcess keeps a handle to it). }
-  function StartDaemon(const ACfgHome, ADataHome: string): TProcess;
+  function StartDaemon(const ACfgHome, ADataHome: string;
+    ATakeover: Boolean = False): TProcess;
   begin
     Result := TProcess.Create(nil);
     Result.Executable := gotboxd;
     BuildEnv(Result.Environment, ACfgHome, ADataHome);
+    if ATakeover then Result.Parameters.Add('--takeover');
     Result.Options := [];   // asynchronous: do not wait for exit
     Result.Execute;
   end;
@@ -156,7 +158,15 @@ var
   begin
     if AProc = nil then Exit;
     try
-      if AProc.Running then AProc.Terminate(0);
+      if AProc.Running then
+        {$IFDEF UNIX}
+        // explicit SIGTERM so the daemon runs its clean-shutdown path and
+        // RELEASES its root lock (TProcess.Terminate doesn't deliver a clean
+        // SIGTERM here, leaving a fresh lock that a rapid restart would refuse)
+        FpKill(AProc.ProcessID, SIGTERM);
+        {$ELSE}
+        AProc.Terminate(0);
+        {$ENDIF}
     except
     end;
     for i := 1 to 50 do
@@ -254,6 +264,7 @@ begin
 
   proc1 := nil;
   proc2 := nil;
+  proc3 := nil;
   cfg := TGotConfig.Create;
   try
     // ---- set up m1's .gotbox + both machines' config.json (in-process API) --
@@ -325,11 +336,49 @@ begin
     Check(FileHas(root2, 'proj/sfile.txt', 'sub-from-m1'),
       'm2 (running) received the submodule''s content');
 
+    // ---- (4) cross-machine root lock (the shared-folder guard) --------------
+    // Simulate a SECOND machine (its own config dir) pointing at the SAME root
+    // that m1's daemon already manages -- e.g. an NFS-shared folder. It must
+    // refuse to run; then with --takeover it takes over and m1 self-stops, so
+    // the two never drive one working tree at once.
+    StopDaemon(proc2);   // done with the m1<->m2 sync tests; reduce noise
+    cfg.RootDir := root1;
+    cfg.MachineName := 'mC';
+    SaveConfig(cfg, 'cfgC');
+
+    proc3 := StartDaemon(IncludeTrailingPathDelimiter(base) + 'cfgC',
+      IncludeTrailingPathDelimiter(base) + 'dataC');   // no --takeover
+    for i := 1 to 24 do begin if not proc3.Running then Break; Sleep(250); end;
+    Check(not proc3.Running,
+      'a 2nd daemon on a root another instance manages refuses and exits');
+    Check(ReadRootOwner(root1).Machine = 'm1',
+      'the incumbent (m1) still owns the shared root after the refusal');
+    Check(proc1.Running, 'the incumbent daemon keeps running');
+    StopDaemon(proc3);
+
+    proc3 := StartDaemon(IncludeTrailingPathDelimiter(base) + 'cfgC',
+      IncludeTrailingPathDelimiter(base) + 'dataC', True);   // --takeover
+    ready := False;
+    for i := 1 to 24 do
+    begin
+      if ReadRootOwner(root1).Machine = 'mC' then begin ready := True; Break; end;
+      Sleep(250);
+    end;
+    Check(ready, 'a --takeover daemon takes ownership of the shared root');
+    ready := False;
+    for i := 1 to 160 do   // up to ~40s: the incumbent notices at its next heartbeat
+    begin
+      if not proc1.Running then begin ready := True; Break; end;
+      Sleep(250);
+    end;
+    Check(ready, 'the taken-over incumbent daemon (m1) self-stops');
+
     StopDaemon(proc1);
-    StopDaemon(proc2);
+    StopDaemon(proc3);
   finally
     StopDaemon(proc1);
     StopDaemon(proc2);
+    StopDaemon(proc3);
     cfg.Free;
   end;
 
