@@ -1,10 +1,10 @@
 object StatusForm: TStatusForm
   Left = 0
-  Height = 470
+  Height = 560
   Top = 0
   Width = 600
   Caption = 'GotBox - Status'
-  ClientHeight = 470
+  ClientHeight = 560
   ClientWidth = 600
   Position = poScreenCenter
   OnCreate = FormCreate
@@ -58,22 +58,95 @@ object StatusForm: TStatusForm
     OnClick = btnOpenClick
     TabOrder = 3
   end
+  object btnWeb: TButton
+    Left = 386
+    Height = 30
+    Top = 200
+    Width = 130
+    Anchors = [akTop, akLeft]
+    Caption = 'Open web page'
+    OnClick = btnWebClick
+    TabOrder = 4
+  end
+  object lblTags: TLabel
+    Left = 12
+    Height = 16
+    Top = 238
+    Width = 260
+    Caption = 'Tags (selected repo)'
+  end
+  object lstTags: TListBox
+    Left = 12
+    Height = 80
+    Top = 258
+    Width = 576
+    Anchors = [akTop, akLeft, akRight]
+    ScrollWidth = 574
+    TabOrder = 5
+  end
+  object lblTagLabel: TLabel
+    Left = 12
+    Height = 16
+    Top = 346
+    Width = 36
+    Caption = 'Label'
+  end
+  object eTagLabel: TEdit
+    Left = 56
+    Height = 28
+    Top = 342
+    Width = 150
+    TabOrder = 6
+  end
+  object lblTagMsg: TLabel
+    Left = 216
+    Height = 16
+    Top = 346
+    Width = 56
+    Caption = 'Message'
+  end
+  object eTagMsg: TEdit
+    Left = 280
+    Height = 28
+    Top = 342
+    Width = 190
+    TabOrder = 7
+  end
+  object btnAddTag: TButton
+    Left = 478
+    Height = 30
+    Top = 341
+    Width = 110
+    Anchors = [akTop, akRight]
+    Caption = 'Add tag'
+    OnClick = btnAddTagClick
+    TabOrder = 8
+  end
+  object btnSquash: TButton
+    Left = 12
+    Height = 30
+    Top = 380
+    Width = 180
+    Caption = 'Squash between tags'
+    OnClick = btnSquashClick
+    TabOrder = 9
+  end
   object lblLog: TLabel
     Left = 12
     Height = 16
-    Top = 244
+    Top = 418
     Width = 80
     Caption = 'Activity log'
   end
   object mLog: TMemo
     Left = 12
-    Height = 196
-    Top = 264
+    Height = 118
+    Top = 438
     Width = 576
     Anchors = [akTop, akLeft, akRight, akBottom]
     ReadOnly = True
     ScrollBars = ssAutoBoth
-    TabOrder = 4
+    TabOrder = 10
   end
   object refreshTimer: TTimer
     Interval = 1500

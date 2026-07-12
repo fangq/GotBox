@@ -29,38 +29,65 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, Grids, StdCtrls, ExtCtrls,
-  gboxstatusmodel, gboxlog;
+  gboxstatusmodel, gboxlog, gboxmsg;
 
 type
   TRepoActionEvent = procedure(const ARepo: string) of object;
+  { Fill AOut with the selected repo's tag rows (owned by the caller). }
+  TRepoTagsQuery = procedure(const ARepo: string; AOut: TStrings) of object;
+  TRepoTagAdd = procedure(const ARepo, ALabel, AMessage: string) of object;
 
   TStatusForm = class(TForm)
     grid: TStringGrid;
     mLog: TMemo;
     lblLog: TLabel;
+    lblTags: TLabel;
+    lstTags: TListBox;
+    lblTagLabel: TLabel;
+    eTagLabel: TEdit;
+    lblTagMsg: TLabel;
+    eTagMsg: TEdit;
+    btnAddTag: TButton;
+    btnSquash: TButton;
     btnPause: TButton;
     btnSync: TButton;
     btnOpen: TButton;
+    btnWeb: TButton;
     refreshTimer: TTimer;
     procedure FormCreate(Sender: TObject);
     procedure refreshTimerTimer(Sender: TObject);
     procedure btnPauseClick(Sender: TObject);
     procedure btnSyncClick(Sender: TObject);
     procedure btnOpenClick(Sender: TObject);
+    procedure btnWebClick(Sender: TObject);
+    procedure btnAddTagClick(Sender: TObject);
+    procedure btnSquashClick(Sender: TObject);
   private
     FStatus: TStatusModel;
     FOnTogglePause: TRepoActionEvent;
     FOnSyncRepo: TRepoActionEvent;
     FOnOpenRepo: TRepoActionEvent;
+    FOnOpenWeb: TRepoActionEvent;
+    FOnListTags: TRepoTagsQuery;
+    FOnAddTag: TRepoTagAdd;
+    FOnSquashTags: TRepoActionEvent;
+    FTagsRepo: string;      // repo whose tags lstTags currently shows
     FLastGridSig: string;   // only redraw grid/log when content actually changes
     FLastLog: string;
     function SelectedRepo: string;
+    procedure RefreshTags(const ARepo: string);
+    procedure GridSelectCell(Sender: TObject; aCol, aRow: Integer;
+      var CanSelect: Boolean);
     procedure Refresh;
   public
     procedure Bind(AStatus: TStatusModel);
     property OnTogglePause: TRepoActionEvent read FOnTogglePause write FOnTogglePause;
     property OnSyncRepo: TRepoActionEvent read FOnSyncRepo write FOnSyncRepo;
     property OnOpenRepo: TRepoActionEvent read FOnOpenRepo write FOnOpenRepo;
+    property OnOpenWeb: TRepoActionEvent read FOnOpenWeb write FOnOpenWeb;
+    property OnListTags: TRepoTagsQuery read FOnListTags write FOnListTags;
+    property OnAddTag: TRepoTagAdd read FOnAddTag write FOnAddTag;
+    property OnSquashTags: TRepoActionEvent read FOnSquashTags write FOnSquashTags;
   end;
 
 var
@@ -78,6 +105,7 @@ begin
   grid.Cells[2, 0] := 'Pending';
   grid.Cells[3, 0] := 'Last sync';
   grid.Cells[4, 0] := 'Mode';
+  grid.OnSelectCell := @GridSelectCell;   // refresh the tag list on row change
 end;
 
 { Sync-mode label for the grid: the .gotbox root and automatic submodules commit
@@ -130,6 +158,74 @@ begin
   r := SelectedRepo;
   if (r <> '') and Assigned(FOnOpenRepo) then
     FOnOpenRepo(r);
+end;
+
+procedure TStatusForm.btnWebClick(Sender: TObject);
+var
+  r: string;
+begin
+  r := SelectedRepo;
+  if (r <> '') and Assigned(FOnOpenWeb) then
+    FOnOpenWeb(r);
+end;
+
+procedure TStatusForm.RefreshTags(const ARepo: string);
+var
+  sl: TStringList;
+begin
+  FTagsRepo := ARepo;
+  if ARepo = '' then lblTags.Caption := 'Tags (selected repo)'
+  else
+    lblTags.Caption := 'Tags: ' + ARepo;
+  lstTags.Clear;
+  if (ARepo = '') or not Assigned(FOnListTags) then Exit;
+  sl := TStringList.Create;
+  try
+    FOnListTags(ARepo, sl);
+    lstTags.Items.Assign(sl);
+  finally
+    sl.Free;
+  end;
+end;
+
+procedure TStatusForm.GridSelectCell(Sender: TObject; aCol, aRow: Integer;
+  var CanSelect: Boolean);
+begin
+  CanSelect := True;
+  if (aRow >= 1) and (aRow < grid.RowCount) then
+    RefreshTags(grid.Cells[0, aRow]);
+end;
+
+procedure TStatusForm.btnAddTagClick(Sender: TObject);
+var
+  r: string;
+begin
+  r := SelectedRepo;
+  if r = '' then Exit;
+  if Trim(eTagLabel.Text) = '' then
+  begin
+    MsgInfo('Enter a tag label (e.g. "draft-v1").');
+    Exit;
+  end;
+  if Assigned(FOnAddTag) then
+  begin
+    FOnAddTag(r, Trim(eTagLabel.Text), Trim(eTagMsg.Text));
+    eTagLabel.Text := '';
+    eTagMsg.Text := '';
+    RefreshTags(r);
+  end;
+end;
+
+procedure TStatusForm.btnSquashClick(Sender: TObject);
+var
+  r: string;
+begin
+  r := SelectedRepo;
+  if (r <> '') and Assigned(FOnSquashTags) then
+  begin
+    FOnSquashTags(r);   // the main form confirms + stops/squashes/restarts
+    RefreshTags(r);
+  end;
 end;
 
 procedure TStatusForm.Refresh;
@@ -201,6 +297,11 @@ begin
       mLog.SelStart := Length(mLog.Text);   // scroll to newest only on change
     end;
   end;
+
+  // populate the tag list for the current selection (initial open, or as a
+  // backstop if the selection changed) -- only queries git when the repo differs
+  if SelectedRepo <> FTagsRepo then
+    RefreshTags(SelectedRepo);
 end;
 
 procedure TStatusForm.refreshTimerTimer(Sender: TObject);

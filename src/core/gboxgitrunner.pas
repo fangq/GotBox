@@ -418,8 +418,9 @@ begin
   // never recurse into submodules: GotBox syncs each submodule independently
   // (ignore=all), and a broken/inaccessible submodule must not fail the root's
   // fetch (git's default on-demand recursion would abort the whole fetch).
-  Result := Run(['fetch', '--prune', '--no-recurse-submodules', 'origin'],
-    GIT_NET_TIMEOUT_MS);
+  // --tags so user checkpoint tags created on another machine arrive here.
+  Result := Run(['fetch', '--prune', '--tags', '--no-recurse-submodules',
+    'origin'], GIT_NET_TIMEOUT_MS);
 end;
 
 function TGitRunner.PullRebase: TGitResult;

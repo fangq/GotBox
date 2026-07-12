@@ -30,7 +30,7 @@ uses
   StdCtrls, Dialogs, LCLType, LCLIntf, IntfGraphics, GraphType, fpimage,
   gboxconfigstore, gboxstatusmodel, gboxlog,
   gboxcredstore, gboxengine, gboxsuper, gboxfilewatcher, gboxrootlock, gboxmsg,
-  gboxfilestatus, gboxoverlayipc, gboxdaemon;
+  gboxfilestatus, gboxoverlayipc, gboxdaemon, gboxgitrunner, gboxhistory;
 
 type
   TMainForm = class(TForm)
@@ -93,6 +93,11 @@ type
     procedure HandleTogglePause(const ARepo: string);
     procedure HandleSyncRepo(const ARepo: string);
     procedure HandleOpenRepo(const ARepo: string);
+    procedure HandleOpenWeb(const ARepo: string);
+    procedure HandleListTags(const ARepo: string; AOut: TStrings);
+    procedure HandleAddTag(const ARepo, ALabel, AMessage: string);
+    procedure HandleSquashTags(const ARepo: string);
+    function RepoDir(const ARepo: string): string;
     // menu handlers
     procedure mnuOpenRoot(Sender: TObject);
     procedure mnuLinkSub(Sender: TObject);
@@ -967,6 +972,10 @@ begin
   StatusForm.OnTogglePause := @HandleTogglePause;
   StatusForm.OnSyncRepo := @HandleSyncRepo;
   StatusForm.OnOpenRepo := @HandleOpenRepo;
+  StatusForm.OnOpenWeb := @HandleOpenWeb;
+  StatusForm.OnListTags := @HandleListTags;
+  StatusForm.OnAddTag := @HandleAddTag;
+  StatusForm.OnSquashTags := @HandleSquashTags;
   StatusForm.Bind(FStatus);
   if not StatusForm.Visible then
   begin
@@ -998,13 +1007,164 @@ begin
     FEngine.SyncRepo(ARepo);
 end;
 
+{ Working-tree directory for a status row: the root repo (.gotbox) IS RootDir
+  itself (the folder isn't named ".gotbox"); a submodule is a path under it. }
+function TMainForm.RepoDir(const ARepo: string): string;
+begin
+  if ARepo = GOTBOX_REPO then
+    Result := ExcludeTrailingPathDelimiter(FConfig.RootDir)
+  else
+    // ARepo may be a relative path with '/' separators (nested submodule)
+    Result := IncludeTrailingPathDelimiter(FConfig.RootDir) + SetDirSeparators(ARepo);
+end;
+
 procedure TMainForm.HandleOpenRepo(const ARepo: string);
 var
   p: string;
 begin
-  // ARepo may be a relative path with '/' separators (nested submodule)
-  p := IncludeTrailingPathDelimiter(FConfig.RootDir) + SetDirSeparators(ARepo);
+  p := RepoDir(ARepo);
   if DirectoryExists(p) then OpenDocument(p);
+end;
+
+{ Convert a git remote URL to a browsable https page, or '' if it can't be. }
+function GitUrlToWeb(const AUrl: string): string;
+var
+  u, host, path: string;
+  colon: Integer;
+begin
+  Result := '';
+  u := Trim(AUrl);
+  if u = '' then Exit;
+  // drop a trailing ".git"
+  if (Length(u) >= 4) and (LowerCase(Copy(u, Length(u) - 3, 4)) = '.git') then
+    SetLength(u, Length(u) - 4);
+  if Copy(u, 1, 8) = 'https://' then
+    u := Copy(u, 9, MaxInt)
+  else if Copy(u, 1, 7) = 'http://' then
+    u := Copy(u, 8, MaxInt)
+  else if Copy(u, 1, 6) = 'ssh://' then
+    u := Copy(u, 7, MaxInt)
+  else if Copy(u, 1, 4) = 'git@' then
+  begin
+    // scp form: git@host:owner/repo -> host/owner/repo
+    u := Copy(u, 5, MaxInt);
+    colon := Pos(':', u);
+    if colon > 0 then u[colon] := '/';
+  end
+  else
+    Exit;   // local path / unknown scheme -> no web page
+  // strip any embedded credentials (user@ or user:pass@ before the host)
+  if Pos('@', u) > 0 then u := Copy(u, Pos('@', u) + 1, MaxInt);
+  // an ssh scp-form host may still carry a "host:port" -> keep just the host/path
+  host := u;
+  path := '';
+  colon := Pos('/', host);
+  if colon > 0 then
+  begin
+    path := Copy(host, colon, MaxInt);
+    host := Copy(host, 1, colon - 1);
+  end;
+  if (host = '') or (path = '') then Exit;
+  Result := 'https://' + host + path;
+end;
+
+procedure TMainForm.HandleOpenWeb(const ARepo: string);
+var
+  dir, url, web: string;
+  git: TGitRunner;
+begin
+  dir := RepoDir(ARepo);
+  if not DirectoryExists(dir) then Exit;
+  git := TGitRunner.Create(dir);
+  try
+    url := Trim(git.GitQuiet(['config', '--get', 'remote.origin.url']).StdOut);
+  finally
+    git.Free;
+  end;
+  web := GitUrlToWeb(url);
+  if web <> '' then
+    OpenURL(web)
+  else
+    MsgInfo('No web page for this repo''s remote:' + LineEnding + url);
+end;
+
+procedure TMainForm.HandleListTags(const ARepo: string; AOut: TStrings);
+var
+  git: TGitRunner;
+  tags: TTagInfoArray;
+  i: Integer;
+begin
+  AOut.Clear;
+  git := TGitRunner.Create(RepoDir(ARepo));
+  try
+    tags := ListTags(git);
+  finally
+    git.Free;
+  end;
+  for i := 0 to High(tags) do
+    AOut.Add(tags[i].Label_ + '   ·   ' + tags[i].Subject +
+      '   (' + tags[i].Date + ')');
+end;
+
+procedure TMainForm.HandleAddTag(const ARepo, ALabel, AMessage: string);
+var
+  git: TGitRunner;
+  token, err, detail: string;
+begin
+  if not PrepareRemote(token, err) then
+  begin
+    MsgError('Cannot create the tag:' + LineEnding + err);
+    Exit;
+  end;
+  Screen.Cursor := crHourGlass;
+  git := TGitRunner.Create(RepoDir(ARepo));
+  try
+    git.AuthUser := FConfig.GithubUser;
+    git.AuthToken := token;
+    if not AddTag(git, ALabel, AMessage, detail) then
+      MsgError('Add tag failed:' + LineEnding + detail);
+  finally
+    git.Free;
+    Screen.Cursor := crDefault;
+  end;
+end;
+
+procedure TMainForm.HandleSquashTags(const ARepo: string);
+var
+  git: TGitRunner;
+  token, err, detail: string;
+begin
+  if not MsgConfirm('Squash all commits between tags in "' + ARepo + '"?' +
+    LineEnding + LineEnding +
+    'This REWRITES history and force-pushes. Other machines will reset to ' +
+    'match on their next sync. Your tagged snapshots and the commits after the ' +
+    'newest tag are preserved; the machine-stamped commits between tags are ' +
+    'collapsed.') then
+    Exit;
+  if not PrepareRemote(token, err) then
+  begin
+    MsgError('Cannot squash:' + LineEnding + err);
+    Exit;
+  end;
+  Screen.Cursor := crHourGlass;
+  // stop the engine so the rewrite can't race the repo's sync worker
+  StopEngine;
+  try
+    git := TGitRunner.Create(RepoDir(ARepo));
+    try
+      git.AuthUser := FConfig.GithubUser;
+      git.AuthToken := token;
+      if not SquashBetweenTags(git, detail) then
+        MsgError('Squash failed:' + LineEnding + detail)
+      else
+        Notify('GotBox', 'Squashed history between tags in ' + ARepo + '.');
+    finally
+      git.Free;
+    end;
+  finally
+    StartEngine;
+    Screen.Cursor := crDefault;
+  end;
 end;
 
 procedure TMainForm.mnuSettings(Sender: TObject);

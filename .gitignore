@@ -46,4 +46,5 @@ GotBoxFinder.appex/
 /tests/testmultisync
 /tests/testrootlock
 /tests/teste2e
+/tests/testtags
 /tests/lib/
