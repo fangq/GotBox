@@ -90,10 +90,13 @@ for t in $TESTS; do
     printf 'PASS  %-12s %2ds\n' "$t" "$dur"
   elif [ "$rc" -eq 124 ]; then
     printf 'TIMEOUT %-10s (>%ss)\n' "$t" "$cap"
+    echo "  last STEP: $(grep -a '== STEP:' "$OUT/$t.run.log" | tail -1)"
+    echo "  dangling GIT> (started, never finished): $(grep -a 'GIT> ' "$OUT/$t.run.log" | tail -1)"
     tail -25 "$OUT/$t.run.log"
     fail=1
   else
     printf 'FAIL  %-12s (exit %d)\n' "$t" "$rc"
+    echo "  last STEP: $(grep -a '== STEP:' "$OUT/$t.run.log" | tail -1)"
     tail -25 "$OUT/$t.run.log"
     fail=1
   fi
