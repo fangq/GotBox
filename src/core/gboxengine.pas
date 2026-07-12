@@ -81,6 +81,24 @@ implementation
 uses
   gboxlog, gboxgitrunner;
 
+{ Opt-in engine trace (same GOTBOX_GIT_TRACE switch as the git-op trace) so the
+  reconcile Stop/Start and per-worker WaitFor boundaries appear inline with the
+  GIT> / GIT< lines -- pinpoints which WaitFor (which worker) blocks teardown. }
+var
+  gEngTrace: Integer = -1;
+
+procedure EngTrace(const AMsg: string);
+begin
+  if gEngTrace < 0 then
+    if GetEnvironmentVariable('GOTBOX_GIT_TRACE') <> '' then gEngTrace := 1
+    else gEngTrace := 0;
+  if gEngTrace = 1 then
+  begin
+    WriteLn(StdErr, 'ENG: ' + AMsg);
+    Flush(StdErr);
+  end;
+end;
+
 { True if APath is a directory containing at least one entry (besides . and ..). }
 function DirHasEntries(const APath: string): Boolean;
 var
@@ -162,8 +180,11 @@ begin
   begin
     if Assigned(Log) then
       Log.Info('engine', 'submodule set changed on pull; reconciling workers');
+    EngTrace('reconcile: submodule set changed -> Stop');
     Stop;
+    EngTrace('reconcile: Stop done -> Start');
     Start;   // re-scans .gitmodules, prunes stale status, checks out new subs
+    EngTrace('reconcile: Start done');
     Result := True;
   end;
 end;
@@ -375,7 +396,9 @@ begin
     FWorkers[i].Stop;
   for i := 0 to High(FWorkers) do
   begin
+    EngTrace(Format('Stop: WaitFor worker %d (%s)', [i, FWorkers[i].RepoName]));
     FWorkers[i].WaitFor;
+    EngTrace(Format('Stop: worker %d (%s) joined', [i, FWorkers[i].RepoName]));
     FWorkers[i].Free;
   end;
   SetLength(FWorkers, 0);
