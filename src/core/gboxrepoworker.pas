@@ -206,6 +206,10 @@ begin
   try
     git.AuthUser := FUser;
     git.AuthToken := FToken;
+    // bound every git op so a stuck one (e.g. a Windows file-lock deadlock on a
+    // shared repo) can't hang this worker thread -- and thus engine.Stop's join
+    // -- indefinitely; it fails the cycle instead and retries next time.
+    git.DefaultTimeoutMs := GIT_DEFAULT_TIMEOUT_MS;
 
     // ensure a committer identity so commits succeed even with no global git
     // config (e.g. submodule checkouts, fresh machines, CI runners)

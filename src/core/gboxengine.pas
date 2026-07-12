@@ -189,6 +189,7 @@ begin
   try
     git.AuthUser := FCfg.GithubUser;
     git.AuthToken := FToken;
+    git.DefaultTimeoutMs := GIT_DEFAULT_TIMEOUT_MS;   // don't hang on a stuck checkout
     // --init populates a registered-but-uninitialized submodule; the submodule
     // name/path uses forward slashes as stored in .gitmodules. protocol.file.allow
     // keeps file:// remotes (local/tests) working, matching the "add" path.

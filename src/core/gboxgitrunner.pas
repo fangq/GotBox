@@ -34,8 +34,15 @@ uses
 
 const
   { Network git ops (fetch/push/pull/clone/ls-remote) abort after this long
-    instead of hanging on a stalled connection. Local ops run untimed. }
+    instead of hanging on a stalled connection. }
   GIT_NET_TIMEOUT_MS = 60000;
+  { Backstop for ANY git op that doesn't pass its own timeout, once Default
+    TimeoutMs is set on the runner. A local op that runs this long is stuck
+    (e.g. a Windows file-lock deadlock on a shared repo); killing it lets a
+    worker's cycle end so engine.Stop's join can't hang forever. 60s matches the
+    network cap (proven safe on the ~10x-slower Windows CI) and is well above any
+    real local op on these small repos. }
+  GIT_DEFAULT_TIMEOUT_MS = 60000;
 
 type
   TGitResult = record
@@ -52,6 +59,7 @@ type
     FAuthUser: string;
     FAuthToken: string;
     FQuiet: Boolean;   // suppress warn-logging for expected-to-fail probes
+    FDefaultTimeoutMs: Integer;   // applied to ops that don't pass their own (0 = untimed)
     function Run(const AArgs: array of string; ATimeoutMs: Integer = 0): TGitResult;
     function EnsureAskPass: string;
   public
@@ -71,6 +79,10 @@ type
       is taken from the remote URL (https://user@github.com/...). }
     property AuthUser: string read FAuthUser write FAuthUser;
     property AuthToken: string read FAuthToken write FAuthToken;
+    { Timeout (ms) applied to any op that doesn't specify one; 0 = untimed.
+      Set by long-lived callers (the sync worker) so a stuck local git op can't
+      block the worker thread -- and thus engine.Stop's join -- indefinitely. }
+    property DefaultTimeoutMs: Integer read FDefaultTimeoutMs write FDefaultTimeoutMs;
 
     // raw passthrough
     function Git(const AArgs: array of string): TGitResult;
@@ -214,6 +226,10 @@ begin
   Result.ExitCode := -1;
   Result.StdOut := '';
   Result.StdErr := '';
+
+  // fall back to the runner's default cap for ops that didn't pass their own
+  if (ATimeoutMs <= 0) and (FDefaultTimeoutMs > 0) then
+    ATimeoutMs := FDefaultTimeoutMs;
 
   if FGitExe = '' then
   begin
