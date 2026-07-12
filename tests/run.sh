@@ -33,15 +33,30 @@ else
   echo "note: gotboxd build failed; teste2e will skip (see $OUT/gotboxd.build.log)"
 fi
 
+# Heavy integration tests get a longer cap: the multi-machine / e2e tests do a
+# lot of real git work and, on the ~10x-slower Windows CI, legitimately run well
+# past the fast-test cap even when healthy (hangs are already bounded by the git
+# runner's own timeout). Override with SLOW_TIMEOUT=...
+SLOW_TIMEOUT="${SLOW_TIMEOUT:-300}"
+SLOW_TESTS="${SLOW_TESTS:-testmultisync teste2e}"
+
 # pick a timeout wrapper if available (macOS ships none; coreutils brings gtimeout)
 if command -v timeout >/dev/null 2>&1; then
-  TO="timeout $TIMEOUT"
+  TOCMD=timeout
 elif command -v gtimeout >/dev/null 2>&1; then
-  TO="gtimeout $TIMEOUT"
+  TOCMD=gtimeout
 else
-  TO=""
+  TOCMD=""
   echo "note: no timeout/gtimeout found; running without a hard per-test cap"
 fi
+
+# per-test cap: SLOW_TIMEOUT for the heavy tests, TIMEOUT for the rest
+cap_for() {
+  for s in $SLOW_TESTS; do
+    [ "$1" = "$s" ] && { echo "$SLOW_TIMEOUT"; return; }
+  done
+  echo "$TIMEOUT"
+}
 
 # fast, watcher-independent tests first; timed/integration tests last
 TESTS="testgit testauth testlink testremote testsuper teststray testengine testworker testsync testfilestatus testoverlayipc testrootlock testmultisync testhistory teste2e"
@@ -57,6 +72,8 @@ for t in $TESTS; do
   fi
   bin="$t"
   [ -f "$t.exe" ] && bin="$t.exe"   # Windows
+  cap=$(cap_for "$t")
+  [ -n "$TOCMD" ] && TO="$TOCMD $cap" || TO=""
   start=$(date +%s)
   if $TO "./$bin" >"$OUT/$t.run.log" 2>&1; then
     rc=0
@@ -67,7 +84,7 @@ for t in $TESTS; do
   if [ "$rc" -eq 0 ]; then
     printf 'PASS  %-12s %2ds\n' "$t" "$dur"
   elif [ "$rc" -eq 124 ]; then
-    printf 'TIMEOUT %-10s (>%ss)\n' "$t" "$TIMEOUT"
+    printf 'TIMEOUT %-10s (>%ss)\n' "$t" "$cap"
     tail -8 "$OUT/$t.run.log"
     fail=1
   else
