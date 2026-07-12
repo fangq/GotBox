@@ -15,16 +15,17 @@ object StatusForm: TStatusForm
     Top = 12
     Width = 576
     Anchors = [akTop, akLeft, akRight]
-    ColCount = 4
+    ColCount = 5
     FixedCols = 0
     RowCount = 1
     Options = [goFixedHorzLine, goFixedVertLine, goHorzLine, goVertLine, goRowSelect]
     TabOrder = 0
     ColWidths = (
-      240
-      110
+      200
       90
-      130
+      70
+      120
+      90
     )
   end
   object btnPause: TButton

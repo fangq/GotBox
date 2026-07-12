@@ -132,6 +132,19 @@ var
   engine2: TSyncEngine;
   g2, gsync: TGitRunner;
   rr: TGitResult;
+
+  { Mark a submodule automatic in ACfg (the dialog default is managed; these
+    integration checks assert the classic auto add/commit/push behaviour). }
+  procedure MarkAuto(ACfg: TGotConfig; const AName: string);
+  var
+    e: TRepoEntry;
+  begin
+    e := Default(TRepoEntry);
+    e.LocalName := AName;
+    e.AutoSync := True;
+    ACfg.UpsertRepo(e);
+  end;
+
 begin
   Randomize;
   base := IncludeTrailingPathDelimiter(GetTempDir) + 'gotbox-eng-' +
@@ -151,6 +164,7 @@ begin
   Check(EnsureGotboxRoot(cfg, '', detail), 'EnsureGotboxRoot (' + detail + ')');
   Check(AddSubmodule(cfg, '', 'proj', 'projup', '', True, detail),
     'add submodule proj (' + detail + ')');
+  MarkAuto(cfg, 'proj');   // this test asserts automatic add/commit/push
 
   gotboxBare := IncludeTrailingPathDelimiter(base) + '.gotbox.git';
   subBare := IncludeTrailingPathDelimiter(base) + 'projup.git';

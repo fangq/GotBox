@@ -77,6 +77,16 @@ begin
   grid.Cells[1, 0] := 'State';
   grid.Cells[2, 0] := 'Pending';
   grid.Cells[3, 0] := 'Last sync';
+  grid.Cells[4, 0] := 'Mode';
+end;
+
+{ Sync-mode label for the grid: the .gotbox root and automatic submodules commit
+  everything themselves; managed submodules only transport your own commits. }
+function ModeText(AAutoSync: Boolean): string;
+begin
+  if AAutoSync then Result := 'Automatic'
+  else
+    Result := 'Managed';
 end;
 
 procedure TStatusForm.Bind(AStatus: TStatusModel);
@@ -141,7 +151,8 @@ begin
       else
         lastSync := '-';
       sig := sig + snap[i].LocalName + '|' + RepoStateText(snap[i].State) +
-        '|' + IntToStr(snap[i].PendingChanges) + '|' + lastSync + #10;
+        '|' + IntToStr(snap[i].PendingChanges) + '|' + lastSync +
+        '|' + ModeText(snap[i].AutoSync) + #10;
     end;
     if sig <> FLastGridSig then
     begin
@@ -158,6 +169,7 @@ begin
             grid.Cells[3, i + 1] := FormatDateTime('hh:nn:ss', snap[i].LastSync)
           else
             grid.Cells[3, i + 1] := '-';
+          grid.Cells[4, i + 1] := ModeText(snap[i].AutoSync);
         end;
       finally
         grid.EndUpdate;

@@ -48,7 +48,8 @@ type
     function LocalPathOf(const AName: string): string;
     { Worker cycle finished -> drop that repo's overlay-status cache. }
     procedure WorkerCycleDone(const ALocalPath: string);
-    procedure SpawnWorker(const AName, APath: string; AExtraIgnore: TStrings);
+    procedure SpawnWorker(const AName, APath: string; AAutoSync: Boolean;
+      AExtraIgnore: TStrings);
     { Root worker (thread) -> queue DoReconcile onto the main thread. }
     procedure OnRootReposChanged;
     procedure DoReconcile;
@@ -283,7 +284,8 @@ begin
   if Assigned(FStatusCache) then FStatusCache.Invalidate(ALocalPath);
 end;
 
-procedure TSyncEngine.SpawnWorker(const AName, APath: string; AExtraIgnore: TStrings);
+procedure TSyncEngine.SpawnWorker(const AName, APath: string; AAutoSync: Boolean;
+  AExtraIgnore: TStrings);
 var
   ignore: TStringList;
   w: TRepoWorker;
@@ -295,7 +297,8 @@ begin
       ignore.AddStrings(AExtraIgnore);
     w := TRepoWorker.Create(AName, APath, FCfg.GithubUser, FToken,
       FCfg.MachineName, FCfg.CommitDebounceMs, FCfg.GcEveryNCommits,
-      FCfg.PullIntervalSec, FCfg.HistoryCap, FCfg.LfsThresholdMB, FStatus, ignore);
+      FCfg.PullIntervalSec, FCfg.HistoryCap, FCfg.LfsThresholdMB, AAutoSync,
+      FStatus, ignore);
     w.OnNotice := FOnNotice;
     w.OnCycleDone := @WorkerCycleDone;
     // only the root's .gitmodules governs the submodule set
@@ -315,7 +318,7 @@ var
   subNames: TStringList;
   i: Integer;
   entry: TRepoEntry;
-  paused: Boolean;
+  paused, found, autoSync: Boolean;
 begin
   if FRunning then Exit;
   SetLength(FWorkers, 0);
@@ -364,7 +367,9 @@ begin
   try
     for i := 0 to High(subs) do
       subNames.Add(subs[i].LocalName);
-    SpawnWorker(GOTBOX_REPO, FCfg.RootDir, subNames);
+    // the .gotbox root always syncs automatically (loose files, Dropbox-style)
+    if Assigned(FStatus) then FStatus.SetMode(GOTBOX_REPO, True);
+    SpawnWorker(GOTBOX_REPO, FCfg.RootDir, True, subNames);
   finally
     subNames.Free;
   end;
@@ -375,7 +380,12 @@ begin
   // would race the now-running root worker on .git/config).
   for i := 0 to High(subs) do
   begin
-    paused := FCfg.FindRepo(subs[i].LocalName, entry) and entry.Paused;
+    // a submodule not yet recorded in config (e.g. just pulled in from another
+    // machine) defaults to managed -- never auto-commit an unfamiliar repo
+    found := FCfg.FindRepo(subs[i].LocalName, entry);
+    paused := found and entry.Paused;
+    autoSync := found and entry.AutoSync;
+    if Assigned(FStatus) then FStatus.SetMode(subs[i].LocalName, autoSync);
     if paused then
     begin
       if Assigned(FStatus) then
@@ -388,7 +398,7 @@ begin
         FStatus.SetState(subs[i].LocalName, rsError, 'submodule not checked out');
       Continue;
     end;
-    SpawnWorker(subs[i].LocalName, LocalPathOf(subs[i].LocalName), nil);
+    SpawnWorker(subs[i].LocalName, LocalPathOf(subs[i].LocalName), autoSync, nil);
   end;
 
   FRunning := True;

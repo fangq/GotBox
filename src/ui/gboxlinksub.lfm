@@ -1,11 +1,11 @@
 object LinkSubForm: TLinkSubForm
   Left = 0
-  Height = 300
+  Height = 372
   Top = 0
   Width = 460
   BorderStyle = bsDialog
   Caption = 'GotBox - Link submodule'
-  ClientHeight = 300
+  ClientHeight = 372
   ClientWidth = 460
   Position = poScreenCenter
   LCLVersion = '4.2.0.0'
@@ -70,24 +70,41 @@ object LinkSubForm: TLinkSubForm
     Width = 400
     TabOrder = 4
   end
+  object chkAutoSync: TCheckBox
+    Left = 20
+    Height = 22
+    Top = 262
+    Width = 420
+    Caption = 'Automatic sync (auto-commit && push every change)'
+    OnChange = chkAutoSyncChange
+    TabOrder = 5
+  end
+  object lblSyncHint: TLabel
+    Left = 40
+    Height = 30
+    Top = 286
+    Width = 400
+    Caption = 'Off = Managed: you commit by hand; GotBox only pushes/pulls your commits. On = auto-commit everything (can rewrite history).'
+    WordWrap = True
+  end
   object btnOK: TButton
     Left = 280
     Height = 32
-    Top = 262
+    Top = 334
     Width = 80
     Caption = 'Link'
     Default = True
     OnClick = btnOKClick
-    TabOrder = 5
+    TabOrder = 6
   end
   object btnCancel: TButton
     Left = 368
     Height = 32
-    Top = 262
+    Top = 334
     Width = 72
     Cancel = True
     Caption = 'Cancel'
     ModalResult = 2
-    TabOrder = 6
+    TabOrder = 7
   end
 end

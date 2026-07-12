@@ -112,8 +112,9 @@ begin
   Check(before >= 1, 'remote has initial commit (' + IntToStr(before) + ')');
 
   // small debounce so the test is quick; gc + LFS disabled
+  // AAutoSync=True: this test asserts the worker auto-commits/pushes changes
   worker := TRepoWorker.Create('proj', projDir, 'tester', '', 'testbox',
-    300, 0, 0, 0, 0, nil, cfg.IgnoreGlobs);
+    300, 0, 0, 0, 0, True, nil, cfg.IgnoreGlobs);
   try
     worker.Start;
     Sleep(500);                        // let the watcher register its inotify watches

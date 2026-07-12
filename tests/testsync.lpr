@@ -92,12 +92,29 @@ var
     end;
   end;
 
+  { True if a fresh clone of bare ABare contains ARel. }
+  function RemoteHasFile(const ABare, ARel: string): Boolean;
+  var
+    tmp: string;
+  begin
+    tmp := IncludeTrailingPathDelimiter(GetTempDir) + 'gbprobe-' +
+      IntToStr(Random(999999));
+    with TGitRunner.Create('') do
+    try
+      Result := Clone(ABare, tmp).Ok and
+        FileExists(IncludeTrailingPathDelimiter(tmp) + ARel);
+    finally
+      Free;
+    end;
+  end;
+
 var
   base, bareRepo, aDir, bDir, detail, fileA, fileB, content: string;
   git: TGitRunner;
   conflicts: TStringList;
   outcome: TSyncOutcome;
   f: TStringList;
+  mgdBare, mDir: string;
 begin
   Randomize;
   base := IncludeTrailingPathDelimiter(GetTempDir) + 'gotbox-sync-' +
@@ -180,6 +197,46 @@ begin
 
   // a keep-both copy of B's version exists
   Check(ConflictCopyCount(bDir) = 1, 'keep-both copy created on disk');
+
+  // ---- managed mode: RunManagedCycle transports committed state only --------
+  // It must NOT auto-add/commit an untracked file, but MUST push a manual commit
+  // -- and never rewrite history. This is the safeguard for a real project repo.
+  mgdBare := IncludeTrailingPathDelimiter(base) + 'mgd.git';
+  mDir := IncludeTrailingPathDelimiter(base) + 'M';
+  ForceDirectories(mgdBare);
+  with TGitRunner.Create(mgdBare) do
+    try Git(['init', '--bare', '-b', 'main']); finally Free; end;
+  with TGitRunner.Create('') do
+    try Clone(mgdBare, mDir); finally Free; end;
+  SetIdentity(mDir, 'mgr');
+  git := TGitRunner.Create(mDir);
+  try
+    // seed an initial commit the "manual" way so origin/main exists + tree clean
+    WriteFile(IncludeTrailingPathDelimiter(mDir) + 'seed.txt', ['seed']);
+    git.Git(['add', '-A']);
+    git.Git(['commit', '-m', 'seed']);
+    git.Git(['push', 'origin', 'main']);
+
+    // (a) an untracked file must NOT be auto-committed/pushed
+    WriteFile(IncludeTrailingPathDelimiter(mDir) + 'new.txt', ['unstaged']);
+    outcome := RunManagedCycle(git, detail, nil);
+    Check(outcome = soUpToDate,
+      'managed: untracked file leaves cycle up-to-date (' +
+      SyncOutcomeText(outcome) + ')');
+    Check(not RemoteHasFile(mgdBare, 'new.txt'),
+      'managed: untracked file was NOT pushed');
+
+    // (b) after a MANUAL commit, managed transports it (fast-forward push)
+    git.Git(['add', 'new.txt']);
+    git.Git(['commit', '-m', 'manual']);
+    outcome := RunManagedCycle(git, detail, nil);
+    Check(outcome = soPushed,
+      'managed: manual commit is pushed (' + SyncOutcomeText(outcome) + ')');
+    Check(RemoteHasFile(mgdBare, 'new.txt'),
+      'managed: manual commit reached the remote');
+  finally
+    git.Free;
+  end;
 
   WriteLn;
   if failures = 0 then WriteLn('ALL TESTS PASSED')

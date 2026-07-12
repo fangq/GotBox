@@ -36,6 +36,9 @@ type
     LocalName: string;   // subfolder name under RootDir (also the repo name)
     RemoteUrl: string;   // https remote (without embedded credentials)
     Paused: Boolean;     // user paused syncing for this repo
+    AutoSync: Boolean;   // True = auto add/commit/trim like the root; False =
+                         // "managed": transport committed state only, never
+                         // stage/commit/trim (the default -- protects history)
   end;
   TRepoEntryArray = array of TRepoEntry;
 
@@ -263,6 +266,8 @@ begin
             e.LocalName := repoObj.Get('localName', '');
             e.RemoteUrl := repoObj.Get('remoteUrl', '');
             e.Paused := repoObj.Get('paused', False);
+            // missing autoSync (older configs) -> managed, the safe default
+            e.AutoSync := repoObj.Get('autoSync', False);
             if e.LocalName <> '' then
               Result.UpsertRepo(e);
           end;
@@ -309,6 +314,7 @@ begin
       repoObj.Add('localName', ACfg.Repos[i].LocalName);
       repoObj.Add('remoteUrl', ACfg.Repos[i].RemoteUrl);
       repoObj.Add('paused', ACfg.Repos[i].Paused);
+      repoObj.Add('autoSync', ACfg.Repos[i].AutoSync);
       repos.Add(repoObj);
     end;
     obj.Add('repos', repos);

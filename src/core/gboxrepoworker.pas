@@ -59,6 +59,7 @@ type
     FLfsThresholdMB: Integer;
     FLfsChecked: Boolean;       // have we probed git-lfs availability yet?
     FLfsOk: Boolean;            // is git-lfs available?
+    FAutoSync: Boolean;         // True = auto add/commit/trim; False = managed
     FStatus: TStatusModel;
     FIgnore: TStringList;
     FWatcher: TFileWatcher;
@@ -79,7 +80,7 @@ type
   public
     constructor Create(const AName, ALocalPath, AUser, AToken, AMachine: string;
       ADebounceMs, AGcEvery, APullIntervalSec, AHistoryCap, ALfsThresholdMB: Integer;
-      AStatus: TStatusModel; AIgnore: TStrings);
+      AAutoSync: Boolean; AStatus: TStatusModel; AIgnore: TStrings);
     destructor Destroy; override;
     { Request an immediate sync (e.g. the user chose "Sync now"). }
     procedure RequestSync;
@@ -126,7 +127,7 @@ end;
 
 constructor TRepoWorker.Create(const AName, ALocalPath, AUser, AToken, AMachine: string;
   ADebounceMs, AGcEvery, APullIntervalSec, AHistoryCap, ALfsThresholdMB: Integer;
-  AStatus: TStatusModel; AIgnore: TStrings);
+  AAutoSync: Boolean; AStatus: TStatusModel; AIgnore: TStrings);
 begin
   inherited Create(True);            // suspended; caller calls Start
   FreeOnTerminate := False;
@@ -135,6 +136,7 @@ begin
   FUser := AUser;
   FToken := AToken;
   FMachine := AMachine;
+  FAutoSync := AAutoSync;
   FCommitter := AUser;
   if FCommitter = '' then FCommitter := AMachine;
   if FCommitter = '' then FCommitter := 'gotbox';
@@ -217,28 +219,35 @@ begin
     // -- indefinitely; it fails the cycle instead and retries next time.
     git.DefaultTimeoutMs := GIT_DEFAULT_TIMEOUT_MS;
 
-    // ensure a committer identity so commits succeed even with no global git
-    // config (e.g. submodule checkouts, fresh machines, CI runners)
-    git.Git(['config', 'user.name', FCommitter]);
-    git.Git(['config', 'user.email', FCommitter + '@gotbox.local']);
-
-    // Register oversized files with Git LFS before the cycle commits them, so
-    // they become LFS pointers instead of blowing GitHub's 100 MB push limit.
-    if FLfsThresholdMB > 0 then
+    if FAutoSync then
     begin
-      if not FLfsChecked then
-      begin
-        FLfsChecked := True;
-        FLfsOk := LfsAvailable(git);
-        if (not FLfsOk) and Assigned(Log) then
-          Log.Warn('worker', FName + ': git-lfs not installed; files over ' +
-            IntToStr(FLfsThresholdMB) + ' MB may be rejected on push');
-      end;
-      if FLfsOk then
-        TrackLargeFiles(git, Int64(FLfsThresholdMB) * 1024 * 1024);
-    end;
+      // ensure a committer identity so commits succeed even with no global git
+      // config (e.g. submodule checkouts, fresh machines, CI runners)
+      git.Git(['config', 'user.name', FCommitter]);
+      git.Git(['config', 'user.email', FCommitter + '@gotbox.local']);
 
-    outcome := RunSyncCycle(git, FMachine, detail, conflicts, changed);
+      // Register oversized files with Git LFS before the cycle commits them, so
+      // they become LFS pointers instead of blowing GitHub's 100 MB push limit.
+      if FLfsThresholdMB > 0 then
+      begin
+        if not FLfsChecked then
+        begin
+          FLfsChecked := True;
+          FLfsOk := LfsAvailable(git);
+          if (not FLfsOk) and Assigned(Log) then
+            Log.Warn('worker', FName + ': git-lfs not installed; files over ' +
+              IntToStr(FLfsThresholdMB) + ' MB may be rejected on push');
+        end;
+        if FLfsOk then
+          TrackLargeFiles(git, Int64(FLfsThresholdMB) * 1024 * 1024);
+      end;
+
+      outcome := RunSyncCycle(git, FMachine, detail, conflicts, changed);
+    end
+    else
+      // managed: transport committed state only -- never set the user's git
+      // identity, touch LFS, stage, commit, or trim history (RunManagedCycle)
+      outcome := RunManagedCycle(git, detail, changed);
 
     // notify about files synced this cycle (added/modified, up or down)
     if (outcome in [soPushed, soPulled, soMerged, soReset]) and
@@ -303,7 +312,9 @@ begin
 
     // cap history once it has grown well past the limit (squash + force-push).
     // Skip while offline -- the force-push would just fail without a network.
-    if (outcome <> soError) and (outcome <> soOffline) and
+    // Managed repos are NEVER trimmed: rewriting the user's history is exactly
+    // what managed mode exists to prevent.
+    if FAutoSync and (outcome <> soError) and (outcome <> soOffline) and
       ShouldTrim(git, FHistoryCap) then
     begin
       if TrimHistory(git, FHistoryCap, td) then

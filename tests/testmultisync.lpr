@@ -246,6 +246,27 @@ var
     ACfg.PullIntervalSec := 2;
   end;
 
+  { Mark a submodule automatic (the link-dialog default is now managed; this
+    multi-machine test asserts automatic add/commit/push propagation). Seeding a
+    name before the submodule exists locally is harmless -- the engine only
+    consults it once ListSubmodules reports that submodule. }
+  procedure MarkAuto(ACfg: TGotConfig; const AName: string);
+  var
+    e: TRepoEntry;
+  begin
+    e := Default(TRepoEntry);
+    e.LocalName := AName;
+    e.AutoSync := True;
+    ACfg.UpsertRepo(e);
+  end;
+
+  procedure MarkAllAuto(ACfg: TGotConfig);
+  begin
+    MarkAuto(ACfg, 'proj');
+    MarkAuto(ACfg, 'projects/notes');
+    MarkAuto(ACfg, 'offsub');
+  end;
+
 begin
   progStart := GetTickCount64;
   Randomize;
@@ -260,6 +281,9 @@ begin
   cfg1 := TGotConfig.Create;
   cfg2 := TGotConfig.Create;
   cfg3 := TGotConfig.Create;
+  MarkAllAuto(cfg1);   // all three machines auto-sync the submodules in this test
+  MarkAllAuto(cfg2);
+  MarkAllAuto(cfg3);
   status1 := TStatusModel.Create;
   status2 := TStatusModel.Create;
   status3 := TStatusModel.Create;

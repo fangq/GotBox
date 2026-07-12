@@ -39,9 +39,12 @@ type
     rbExisting: TRadioButton;
     lblUrl: TLabel;
     eUrl: TEdit;
+    chkAutoSync: TCheckBox;
+    lblSyncHint: TLabel;
     btnOK: TButton;
     btnCancel: TButton;
     procedure rbModeChange(Sender: TObject);
+    procedure chkAutoSyncChange(Sender: TObject);
     procedure btnOKClick(Sender: TObject);
   private
     procedure SyncEnabled;
@@ -50,6 +53,9 @@ type
     CreateUpstream: Boolean;
     UpstreamName: string;
     ExistingUrl: string;
+    { True = automatic sync (auto add/commit/trim, like the root); False =
+      managed (default): GotBox only transports the user's own commits. }
+    AutoSync: Boolean;
     { Shows the dialog; returns True if accepted with valid input. When the
       "create new" mode is chosen and the upstream name is left blank, it
       defaults to the local name. }
@@ -72,6 +78,20 @@ end;
 procedure TLinkSubForm.rbModeChange(Sender: TObject);
 begin
   SyncEnabled;
+end;
+
+procedure TLinkSubForm.chkAutoSyncChange(Sender: TObject);
+begin
+  // warn (and require confirmation) only when turning automatic sync ON
+  if chkAutoSync.Checked then
+    if not MsgConfirm(
+      'Automatic sync will auto-commit and push EVERY change in this folder as ' +
+      'machine-stamped commits, stage any new/untracked files, and periodically ' +
+      'squash (rewrite) its history to keep it small.' + LineEnding + LineEnding +
+      'This can contaminate or truncate a real project''s git history. Use ' +
+      'Managed mode unless this folder is just a data drop.' + LineEnding + LineEnding +
+      'Enable automatic sync anyway?') then
+      chkAutoSync.Checked := False;   // reverted -> stays managed
 end;
 
 procedure TLinkSubForm.btnOKClick(Sender: TObject);
@@ -101,6 +121,7 @@ begin
   eUpstream.Text := '';
   eUrl.Text := '';
   rbCreate.Checked := True;
+  chkAutoSync.Checked := False;   // managed is the default
   SyncEnabled;
 
   CenterForm(Self);
@@ -111,6 +132,7 @@ begin
   CreateUpstream := rbCreate.Checked;
   ExistingUrl := Trim(eUrl.Text);
   UpstreamName := Trim(eUpstream.Text);
+  AutoSync := chkAutoSync.Checked;
   if CreateUpstream and (UpstreamName = '') then
     UpstreamName := LocalName;   // default the repo name to the local name
 end;

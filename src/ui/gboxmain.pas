@@ -939,10 +939,11 @@ begin
     Exit;
   end;
 
-  // record the new submodule in config (for the per-submodule Paused flag)
+  // record the new submodule in config (per-submodule Paused + sync mode)
   entry.LocalName := localName;
   entry.RemoteUrl := '';
   entry.Paused := False;
+  entry.AutoSync := LinkSubForm.AutoSync;   // managed by default (see the dialog)
   FConfig.UpsertRepo(entry);
   FStore.Save(FConfig);
 

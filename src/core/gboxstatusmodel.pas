@@ -39,6 +39,7 @@ type
     PendingChanges: Integer;
     Detail: string;        // last action / error text
     HasConflicts: Boolean;
+    AutoSync: Boolean;     // True = automatic sync; False = managed (default)
   end;
   TRepoStatusArray = array of TRepoStatus;
 
@@ -58,6 +59,8 @@ type
       const ADetail: string = '');
     procedure SetPending(const ALocalName: string; ACount: Integer);
     procedure SetConflicts(const ALocalName: string; AHas: Boolean);
+    { Record the repo's sync mode (True = automatic, False = managed) for display. }
+    procedure SetMode(const ALocalName: string; AAutoSync: Boolean);
     procedure TouchSync(const ALocalName: string);
     procedure Remove(const ALocalName: string);
     { Drop any repo entry whose name is not in ANames (case-insensitive). Used
@@ -132,6 +135,7 @@ begin
       FItems[i].LastSync := 0;
       FItems[i].PendingChanges := 0;
       FItems[i].HasConflicts := False;
+      FItems[i].AutoSync := False;   // managed until told otherwise
     end;
     FItems[i].State := AState;
     if ADetail <> '' then
@@ -164,6 +168,27 @@ begin
   try
     i := IndexOf(ALocalName);
     if i >= 0 then FItems[i].HasConflicts := AHas;
+  finally
+    FLock.Leave;
+  end;
+  Notify;
+end;
+
+procedure TStatusModel.SetMode(const ALocalName: string; AAutoSync: Boolean);
+var
+  i: Integer;
+begin
+  FLock.Enter;
+  try
+    i := IndexOf(ALocalName);
+    if i < 0 then
+    begin
+      SetLength(FItems, Length(FItems) + 1);
+      i := High(FItems);
+      FItems[i].LocalName := ALocalName;
+      FItems[i].State := rsIdle;
+    end;
+    FItems[i].AutoSync := AAutoSync;
   finally
     FLock.Leave;
   end;

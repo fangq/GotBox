@@ -192,6 +192,18 @@ var
     end;
   end;
 
+  { Mark a submodule automatic in ACfg (link-dialog default is now managed; this
+    test writes submodule content on m1 and needs it auto-committed/pushed). }
+  procedure MarkAuto(ACfg: TGotConfig; const AName: string);
+  var
+    e: TRepoEntry;
+  begin
+    e := Default(TRepoEntry);
+    e.LocalName := AName;
+    e.AutoSync := True;
+    ACfg.UpsertRepo(e);
+  end;
+
 var
   root1, root2, detail: string;
   cfg: TGotConfig;
@@ -315,6 +327,8 @@ begin
     cfg.MachineName := 'm1';
     Check(AddSubmodule(cfg, '', 'proj', 'projup', '', True, detail),
       'm1: add submodule proj (' + detail + ')');
+    MarkAuto(cfg, 'proj');            // m1 must auto-commit/push the submodule file
+    SaveConfig(cfg, 'cfg1');          // persist the mode for m1's daemon to read
     WriteTextFile(IncludeTrailingPathDelimiter(root1) + 'proj' + PathDelim +
       'sfile.txt', 'sub-from-m1');
     proc1 := StartDaemon(IncludeTrailingPathDelimiter(base) + 'cfg1',

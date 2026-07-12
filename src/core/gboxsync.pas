@@ -54,6 +54,16 @@ function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
 function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
   out ADetail: string; AConflicts, AChanged: TStrings): TSyncOutcome; overload;
 
+{ "Managed" cycle for a submodule the user commits by hand: transport committed
+  state only. NEVER stages, commits, creates a merge commit, resets, or force-
+  pushes -- so it can't contaminate or truncate the repo's history. It fetches,
+  fast-forwards in remote commits when the working tree is clean, and pushes the
+  user's own fast-forwardable commits; a divergence or a rewritten remote is left
+  for the user to resolve. Incoming pulled files (if any) are appended to
+  AChanged. }
+function RunManagedCycle(AGit: TGitRunner; out ADetail: string;
+  AChanged: TStrings): TSyncOutcome;
+
 implementation
 
 function SyncOutcomeText(AOutcome: TSyncOutcome): string;
@@ -466,6 +476,140 @@ begin
   AGit.Git(['merge', '--abort']);
   ADetail := 'merge failed: ' + Trim(mr.StdErr);
   Result := soError;
+end;
+
+function RunManagedCycle(AGit: TGitRunner; out ADetail: string;
+  AChanged: TStrings): TSyncOutcome;
+var
+  r: TGitResult;
+  fetchErr: string;
+  behind, ahead: Integer;
+  dirty: Boolean;
+
+  procedure CollectIncoming;
+  var
+    rr: TGitResult;
+    sl: TStringList;
+    k: Integer;
+    ln: string;
+  begin
+    if AChanged = nil then Exit;
+    rr := AGit.GitQuiet(['diff', '--name-only', 'HEAD', 'origin/main']);
+    if not rr.Ok then Exit;
+    sl := TStringList.Create;
+    try
+      sl.Text := rr.StdOut;
+      for k := 0 to sl.Count - 1 do
+      begin
+        ln := Trim(sl[k]);
+        if (ln <> '') and (AChanged.IndexOf(ln) < 0) then AChanged.Add(ln);
+      end;
+    finally
+      sl.Free;
+    end;
+  end;
+
+begin
+  ADetail := '';
+
+  // 1. fetch (same offline / not-found classification as RunSyncCycle, but we
+  // never commit local work here -- managed repos are the user's to commit)
+  r := AGit.Fetch;
+  if not r.Ok then
+  begin
+    fetchErr := Trim(r.StdErr);
+    if (Pos('not found', LowerCase(fetchErr)) > 0) or
+      (Pos('does not exist', LowerCase(fetchErr)) > 0) then
+    begin
+      ADetail := 'remote not found (deleted or no access): ' + fetchErr;
+      Exit(soError);
+    end
+    else if (Pos('could not resolve', LowerCase(fetchErr)) > 0) or
+      (Pos('could not read', LowerCase(fetchErr)) > 0) or
+      (Pos('connection', LowerCase(fetchErr)) > 0) or
+      (Pos('network', LowerCase(fetchErr)) > 0) or
+      (Pos('timed out', LowerCase(fetchErr)) > 0) then
+    begin
+      ADetail := 'offline: ' + fetchErr;
+      Exit(soOffline);
+    end
+    else
+    begin
+      ADetail := 'fetch failed: ' + fetchErr;
+      Exit(soError);
+    end;
+  end;
+
+  dirty := AGit.HasUncommittedChanges;
+
+  // 2. remote branch missing: push our committed history if we have any (only
+  // when clean so we don't imply the working tree is in sync); never commit
+  if not AGit.GitQuiet(['rev-parse', '--verify', 'origin/main']).Ok then
+  begin
+    if (not dirty) and (AGit.CountCommits > 0) then
+    begin
+      r := AGit.Push(False);
+      if r.Ok then Exit(soPushed);
+      ADetail := 'push failed: ' + Trim(r.StdErr);
+      Exit(soError);
+    end;
+    Exit(soUpToDate);
+  end;
+
+  // 3. rewritten remote (no common ancestor): adopting it would need a hard
+  // reset -- destructive to the user's history, so we refuse and surface it
+  if not AGit.GitQuiet(['merge-base', 'HEAD', 'origin/main']).Ok then
+  begin
+    ADetail := 'remote history was rewritten; resolve this submodule manually';
+    Exit(soConflict);
+  end;
+
+  behind := AGit.CountRange('HEAD..origin/main');    // commits only on remote
+  ahead := AGit.CountRange('origin/main..HEAD');      // commits only on local
+  if (behind < 0) or (ahead < 0) then
+  begin
+    ADetail := 'could not compare with remote';
+    Exit(soError);
+  end;
+
+  if dirty then
+  begin
+    // never touch a dirty working tree; pushing is safe (index/tree untouched)
+    if (behind = 0) and (ahead > 0) then
+    begin
+      r := AGit.Push(False);
+      if r.Ok then Exit(soPushed);
+      ADetail := 'push failed: ' + Trim(r.StdErr);
+      Exit(soError);
+    end;
+    if behind > 0 then
+      ADetail := 'uncommitted changes; not merging (commit manually to sync)';
+    Exit(soUpToDate);
+  end;
+
+  // clean working tree
+  if behind = 0 then
+  begin
+    if ahead = 0 then Exit(soUpToDate);
+    r := AGit.Push(False);                             // ahead>0: publish commits
+    if r.Ok then Exit(soPushed);
+    ADetail := 'push failed: ' + Trim(r.StdErr);
+    Exit(soError);
+  end;
+
+  // behind>0
+  if ahead = 0 then
+  begin
+    CollectIncoming;
+    r := AGit.Merge('origin/main');                    // fast-forward only
+    if r.Ok then Exit(soPulled);
+    ADetail := 'fast-forward failed: ' + Trim(r.StdErr);
+    Exit(soError);
+  end;
+
+  // diverged: a merge would author a commit -- not in managed mode
+  ADetail := 'diverged from remote; commit/merge manually to sync';
+  Result := soConflict;
 end;
 
 end.
