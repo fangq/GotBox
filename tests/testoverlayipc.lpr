@@ -83,9 +83,28 @@ var
     Result := IncludeTrailingPathDelimiter(root) + SetDirSeparators(ARel);
   end;
 
+  { Render a git -z blob with control chars visible, for diagnostics. }
+  function VisNul(const AData: string): string;
+  var
+    i: Integer;
+  begin
+    Result := '';
+    for i := 1 to Length(AData) do
+      case AData[i] of
+        #0: Result := Result + '\0';
+        #13: Result := Result + '\r';
+        #10: Result := Result + '\n';
+      else
+        Result := Result + AData[i];
+      end;
+  end;
+
 var
   cache: TStatusCache;
   server: TOverlayServer;
+  ust: TFileState;
+  gdiag: TGitRunner;
+  rd: TGitResult;
 begin
   root := IncludeTrailingPathDelimiter(GetTempDir) + 'gotbox-ipc-' +
     FormatDateTime('yyyymmddhhnnsszzz', Now);
@@ -125,8 +144,26 @@ begin
         'clean file over IPC -> synced');
       Check(OverlayQuery(P('mod.txt'), endpoint, 2000) = fsModified,
         'modified file over IPC -> modified');
-      Check(OverlayQuery(P('new.txt'), endpoint, 2000) = fsModified,
-        'untracked file over IPC -> modified');
+      ust := OverlayQuery(P('new.txt'), endpoint, 2000);
+      Check(ust = fsModified, 'untracked file over IPC -> modified');
+      if ust <> fsModified then
+      begin
+        // DIAG: isolate IPC vs cache vs git for the Windows-only failure
+        WriteLn('  DIAG: IPC returned ord=', Ord(ust),
+          ' (0=none 1=synced 2=modified 3=conflict)');
+        WriteLn('  DIAG: direct cache.Lookup ord=', Ord(cache.Lookup(P('new.txt'))));
+        gdiag := TGitRunner.Create(root);
+        try
+          rd := gdiag.Git(['status', '--porcelain', '-z', '--untracked-files=all']);
+          WriteLn('  DIAG: status ok=', rd.Ok, ' out="', VisNul(rd.StdOut), '"');
+          rd := gdiag.Git(['ls-files', '-z']);
+          WriteLn('  DIAG: ls-files out="', VisNul(rd.StdOut), '"');
+          rd := gdiag.Git(['--version']);
+          WriteLn('  DIAG: ', Trim(rd.StdOut));
+        finally
+          gdiag.Free;
+        end;
+      end;
       Check(OverlayQuery(P('nope.txt'), endpoint, 2000) = fsNone,
         'unknown path over IPC -> none');
       // path outside the tree -> none

@@ -371,7 +371,10 @@ begin
     repoDir := OwningRepo(AAbsPath, relInRepo);
     if repoDir = '' then Exit;
     rc := RepoCacheFor(repoDir);
-    if (rc.Stamp = 0) or (GetTickCount64 - rc.Stamp > QWord(FTtlMs)) then
+    // >= (not >) so TtlMs=0 means "always refresh": on Windows GetTickCount64
+    // has ~15ms granularity, so two lookups in the same tick would otherwise
+    // reuse a stale cache (the source of the flaky untracked-overlay result).
+    if (rc.Stamp = 0) or (GetTickCount64 - rc.Stamp >= QWord(FTtlMs)) then
       rc.Refresh;
     Result := rc.LookupRel(relInRepo);
   finally
