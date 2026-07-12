@@ -567,14 +567,36 @@ begin
 end;
 
 procedure TWinFileWatcher.Stop;
+var
+  spins: Integer;
 begin
-  if Assigned(FThread) then FThread.Terminate;
-  // CancelIoEx reliably aborts the pending synchronous ReadDirectoryChangesW
-  // (merely closing the handle does not always unblock it).
-  if (FDir <> 0) and (FDir <> INVALID_HANDLE_VALUE) then
-    CancelIoEx(FDir, nil);
   if Assigned(FThread) then
   begin
+    FThread.Terminate;
+    // Unblock the synchronous ReadDirectoryChangesW. CancelIoEx only aborts I/O
+    // that is ALREADY pending, so a single call loses a race: if Stop runs just
+    // after the thread's `while not Terminated` check but before it (re)enters
+    // ReadDirectoryChangesW, the cancel finds nothing, the thread then blocks on
+    // a call that no change will ever satisfy, and WaitFor hangs forever -- which
+    // froze the owning sync worker's shutdown and, in turn, engine.Stop (the
+    // intermittent Windows testmultisync hang). Cancel repeatedly until the
+    // thread actually leaves Execute; bounded so Stop itself can never hang.
+    spins := 0;
+    while not FThread.Finished do
+    begin
+      if (FDir <> 0) and (FDir <> INVALID_HANDLE_VALUE) then
+        CancelIoEx(FDir, nil);
+      Sleep(10);
+      Inc(spins);
+      if spins >= 500 then     // ~5 s hard cap; fall through to the handle close
+      begin
+        // last resort: closing the handle also aborts a pending read
+        if (FDir <> 0) and (FDir <> INVALID_HANDLE_VALUE) then
+          CloseHandle(FDir);
+        FDir := INVALID_HANDLE_VALUE;
+        Break;
+      end;
+    end;
     FThread.WaitFor;
     FreeAndNil(FThread);
   end;
