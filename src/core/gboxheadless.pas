@@ -40,7 +40,7 @@ uses
   Classes, SysUtils,
   {$IFDEF UNIX}BaseUnix, ctypes,{$ENDIF}
   gboxdaemon, gboxlog, gboxconfigstore, gboxcredstore, gboxstatusmodel,
-  gboxsuper, gboxengine, gboxrootlock;
+  gboxsuper, gboxengine, gboxrootlock, gboxfilestatus, gboxoverlayipc;
 
 var
   GQuit: Boolean = False;
@@ -96,6 +96,8 @@ var
   cfg: TGotConfig;
   status: TStatusModel;
   engine: TSyncEngine;
+  fcache: TStatusCache;
+  overlay: TOverlayServer;
   token, err, detail, lockTok: string;
   owner: TLockOwner;
   hbTicks: Integer;
@@ -109,6 +111,8 @@ begin
   cfg := store.Load;
   status := TStatusModel.Create;
   engine := nil;
+  fcache := nil;
+  overlay := nil;
   try
     // headless can't prompt, so unconfigured setup is a hard error
     if (cfg.RootDir = '') or (not DirectoryExists(cfg.RootDir)) then
@@ -151,6 +155,11 @@ begin
 
     engine := TSyncEngine.Create(cfg, token, status);
     // OnNotice left nil: no desktop notifications in headless mode
+    // per-file status cache + IPC server that answers file-manager overlays
+    fcache := TStatusCache.Create(cfg.RootDir);
+    engine.StatusCache := fcache;
+    overlay := TOverlayServer.Create(fcache);
+    overlay.Start;
     engine.Start;
     Log.Info('app', 'headless sync running; send SIGTERM/SIGINT to stop');
 
@@ -184,7 +193,9 @@ begin
     Log.Info('app', 'stopping; shutting down');
   finally
     ReleaseRootLock(cfg.RootDir, lockTok);   // free the lock before cfg is gone
+    overlay.Free;  // stop + join the overlay server before the cache it reads
     engine.Free;   // TSyncEngine.Destroy stops + joins the workers (nil-safe)
+    fcache.Free;
     status.Free;
     cfg.Free;
     store.Free;

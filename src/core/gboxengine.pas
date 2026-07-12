@@ -31,7 +31,7 @@ interface
 
 uses
   Classes, SysUtils,
-  gboxconfigstore, gboxstatusmodel, gboxrepoworker, gboxsuper;
+  gboxconfigstore, gboxstatusmodel, gboxrepoworker, gboxsuper, gboxfilestatus;
 
 type
   TSyncEngine = class
@@ -42,8 +42,11 @@ type
     FWorkers: array of TRepoWorker;
     FRunning: Boolean;
     FOnNotice: TSyncNoticeEvent;
+    FStatusCache: TStatusCache;   // borrowed; feeds the file-manager overlay
     FSubNames: TStringList;    // submodule local names managed at last Start (sorted)
     function LocalPathOf(const AName: string): string;
+    { Worker cycle finished -> drop that repo's overlay-status cache. }
+    procedure WorkerCycleDone(const ALocalPath: string);
     procedure SpawnWorker(const AName, APath: string; AExtraIgnore: TStrings);
     { Root worker (thread) -> queue DoReconcile onto the main thread. }
     procedure OnRootReposChanged;
@@ -67,6 +70,10 @@ type
     { Fired (on a worker thread) when a cycle synced files; handler must marshal
       to the GUI. Set before Start so spawned workers pick it up. }
     property OnNotice: TSyncNoticeEvent read FOnNotice write FOnNotice;
+    { Optional per-file status cache (owned by the front-end) that workers
+      invalidate after each cycle so file-manager overlays stay fresh. Set
+      before Start so spawned workers pick it up. }
+    property StatusCache: TStatusCache read FStatusCache write FStatusCache;
   end;
 
 implementation
@@ -240,6 +247,12 @@ begin
   Result := IsGitWorkTree(LocalPathOf(AName));
 end;
 
+procedure TSyncEngine.WorkerCycleDone(const ALocalPath: string);
+begin
+  // runs on the worker thread; TStatusCache.Invalidate is thread-safe
+  if Assigned(FStatusCache) then FStatusCache.Invalidate(ALocalPath);
+end;
+
 procedure TSyncEngine.SpawnWorker(const AName, APath: string; AExtraIgnore: TStrings);
 var
   ignore: TStringList;
@@ -254,6 +267,7 @@ begin
       FCfg.MachineName, FCfg.CommitDebounceMs, FCfg.GcEveryNCommits,
       FCfg.PullIntervalSec, FCfg.HistoryCap, FCfg.LfsThresholdMB, FStatus, ignore);
     w.OnNotice := FOnNotice;
+    w.OnCycleDone := @WorkerCycleDone;
     // only the root's .gitmodules governs the submodule set
     if AName = GOTBOX_REPO then
       w.OnReposChanged := @OnRootReposChanged;

@@ -29,7 +29,8 @@ uses
   Classes, SysUtils, SyncObjs, Forms, Controls, Graphics, Menus, ExtCtrls,
   StdCtrls, Dialogs, LCLType, LCLIntf, IntfGraphics, GraphType, fpimage,
   gboxconfigstore, gboxstatusmodel, gboxlog,
-  gboxcredstore, gboxengine, gboxsuper, gboxfilewatcher, gboxrootlock, gboxmsg;
+  gboxcredstore, gboxengine, gboxsuper, gboxfilewatcher, gboxrootlock, gboxmsg,
+  gboxfilestatus, gboxoverlayipc;
 
 type
   TMainForm = class(TForm)
@@ -43,6 +44,8 @@ type
     FStore: TConfigStore;
     FStatus: TStatusModel;
     FEngine: TSyncEngine;
+    FStatusCache: TStatusCache;   // per-file status for the file-manager overlay
+    FOverlay: TOverlayServer;     // answers overlay queries from FStatusCache
     FLastAgg: TRepoState;
     FTrayShown: Boolean;   // has the tray icon been set at least once?
     FStatusItem: TMenuItem;   // disabled top menu item mirroring the state (tray
@@ -77,6 +80,7 @@ type
     // heavy startup work (runs off the GUI thread)
     procedure RunOnMain(AMethod: TThreadMethod);
     procedure DoStopEngine;                  // FEngine lifecycle -- main thread only
+    procedure EnsureOverlay;                 // create/refresh cache + overlay server
     procedure DoCreateEngine;
     procedure EnableLockTimer;
     procedure MaybePromptLogin;
@@ -260,6 +264,8 @@ begin
   if Assigned(FLockTimer) then FLockTimer.Enabled := False;
   StopBootWatch;
   StopEngine;        // stop worker threads before freeing the status model
+  FOverlay.Free;     // stop the overlay server before freeing the cache it reads
+  FStatusCache.Free;
   if FLockToken <> '' then
     ReleaseRootLock(FConfig.RootDir, FLockToken);   // free the lock for others
   FStatus.Free;
@@ -561,11 +567,32 @@ begin
   FLockTimer.Enabled := True;
 end;
 
+{ Create (or re-create when the root changed) the per-file status cache and the
+  overlay IPC server that reads it. Called as the engine comes up. }
+procedure TMainForm.EnsureOverlay;
+begin
+  if Assigned(FStatusCache) and (FStatusCache.RootDir <>
+    ExcludeTrailingPathDelimiter(FConfig.RootDir)) then
+  begin
+    FreeAndNil(FOverlay);          // stop the server before freeing its cache
+    FreeAndNil(FStatusCache);
+  end;
+  if not Assigned(FStatusCache) then
+    FStatusCache := TStatusCache.Create(FConfig.RootDir);
+  if not Assigned(FOverlay) then
+  begin
+    FOverlay := TOverlayServer.Create(FStatusCache);
+    FOverlay.Start;
+  end;
+end;
+
 procedure TMainForm.DoCreateEngine;   // main thread only: FEngine + timer
 begin
   DoStopEngine;
   FEngine := TSyncEngine.Create(FConfig, FPendingToken, FStatus);
   FEngine.OnNotice := @HandleSyncNotice;   // set before Start so workers pick it up
+  EnsureOverlay;
+  FEngine.StatusCache := FStatusCache;      // workers refresh it after each cycle
   FEngine.Start;
   FLockTimer.Enabled := True;   // heartbeat the lock + watch for a takeover
 end;

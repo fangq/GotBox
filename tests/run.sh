@@ -44,7 +44,7 @@ else
 fi
 
 # fast, watcher-independent tests first; timed/integration tests last
-TESTS="testgit testauth testlink testremote testsuper teststray testengine testworker testsync testfilestatus testrootlock testmultisync testhistory teste2e"
+TESTS="testgit testauth testlink testremote testsuper teststray testengine testworker testsync testfilestatus testoverlayipc testrootlock testmultisync testhistory teste2e"
 
 fail=0
 for t in $TESTS; do

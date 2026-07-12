@@ -39,6 +39,10 @@ type
     remote changes, so the engine can re-scan .gitmodules and add/drop submodule
     workers. The handler must marshal any UI/engine work to the main thread. }
   TReposChangedEvent = procedure of object;
+  { Fired (on the worker thread) at the end of every sync cycle, with this
+    repo's working-tree path, so the owner can invalidate a per-file status
+    cache (used by the file-manager overlay). }
+  TCycleDoneEvent = procedure(const ALocalPath: string) of object;
 
   TRepoWorker = class(TThread)
   private
@@ -66,6 +70,7 @@ type
     FCommitsSinceGc: Integer;
     FOnNotice: TSyncNoticeEvent;
     FOnReposChanged: TReposChangedEvent;
+    FOnCycleDone: TCycleDoneEvent;
     procedure OnWatchChange(Sender: TObject);
     procedure BuildNotice(AFiles: TStrings; out ATitle, ABody: string);
     procedure DoSyncCycle;
@@ -84,6 +89,7 @@ type
     property OnNotice: TSyncNoticeEvent read FOnNotice write FOnNotice;
     property OnReposChanged: TReposChangedEvent
       read FOnReposChanged write FOnReposChanged;
+    property OnCycleDone: TCycleDoneEvent read FOnCycleDone write FOnCycleDone;
   end;
 
 implementation
@@ -307,6 +313,9 @@ begin
       else if Assigned(Log) then
         Log.Warn('worker', FName + ' trim: ' + td);
     end;
+
+    // let the owner refresh the file-manager overlay cache for this repo
+    if Assigned(FOnCycleDone) then FOnCycleDone(FLocalPath);
   finally
     git.Free;
     conflicts.Free;
