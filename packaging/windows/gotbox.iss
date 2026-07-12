@@ -53,9 +53,15 @@ VersionInfoCopyright=(C) 2026 Qianqian Fang <fangqq at gmail.com>. GPLv3-or-late
 
 [Tasks]
 Name: "autostart"; Description: "Start GotBox automatically at login (background)"; GroupDescription: "Startup:"
+; Explorer icon overlays are an opt-in, elevated step: ticking this runs
+; gotbox --register-overlays after install, which raises its own UAC prompt
+; (the installer itself stays per-user / no-admin). Unchecked by default.
+Name: "overlays"; Description: "Enable Windows Explorer status icon overlays (requires administrator)"; GroupDescription: "File manager integration:"; Flags: unchecked
 
 [Files]
 Source: "{#SrcDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
+; the COM shell-extension DLL for the Explorer overlays (registered on demand)
+Source: "{#SrcDir}\GotBoxOverlay.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SrcDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 
 [Icons]
@@ -65,4 +71,11 @@ Name: "{group}\Uninstall GotBox"; Filename: "{uninstallexe}"
 Name: "{userstartup}\GotBox"; Filename: "{app}\{#AppExe}"; Parameters: "-d"; Tasks: autostart
 
 [Run]
+; register the Explorer overlays if the user opted in (self-elevates via UAC).
+; runascurrentuser keeps the elevation inside gotbox.exe's own runas prompt.
+Filename: "{app}\{#AppExe}"; Parameters: "--register-overlays"; Tasks: overlays; Flags: runhidden runascurrentuser waituntilterminated
 Filename: "{app}\{#AppExe}"; Description: "Launch GotBox now"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; best-effort removal of the overlay registration before files are deleted
+Filename: "{app}\{#AppExe}"; Parameters: "--unregister-overlays"; RunOnceId: "UnregOverlays"; Flags: runhidden runascurrentuser waituntilterminated

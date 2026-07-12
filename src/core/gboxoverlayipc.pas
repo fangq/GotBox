@@ -106,11 +106,24 @@ end;
 { ============================ Windows ============================ }
 {$IF DEFINED(WINDOWS)}
 
+const
+  // FPC's Windows unit is missing some of these; declare them locally (same
+  // values as <winbase.h>) so we never depend on RTL coverage.
+  PIPE_ACCESS_DUPLEX       = $00000003;
+  PIPE_TYPE_BYTE           = $00000000;
+  PIPE_READMODE_BYTE       = $00000000;
+  PIPE_WAIT                = $00000000;
+  PIPE_NOWAIT              = $00000001;
+  PIPE_UNLIMITED_INSTANCES = 255;
+  ERROR_PIPE_CONNECTED     = 535;
+  ERROR_NO_DATA            = 232;
+
 function DefaultOverlayEndpoint: string;
 var
   u: string;
 begin
-  u := GetEnvironmentVariable('USERNAME');
+  // qualified: the Windows unit shadows the RTL's 1-arg GetEnvironmentVariable
+  u := SysUtils.GetEnvironmentVariable('USERNAME');
   u := StringReplace(u, '\', '_', [rfReplaceAll]);
   if u = '' then u := 'user';
   Result := '\\.\pipe\GotBox-Overlay-' + u;

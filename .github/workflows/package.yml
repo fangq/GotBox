@@ -145,6 +145,15 @@ jobs:
           mkdir -p lib/gotboxd
           fpc -O2 -Fusrc/core -FUlib/gotboxd -ogotboxd.exe gotboxd.lpr
 
+      # The Explorer icon-overlay COM DLL (loaded in-process by explorer.exe).
+      # The runner's FPC is native win64, so no cross target is needed here.
+      - name: Build Explorer overlay DLL (GotBoxOverlay.dll)
+        shell: bash
+        run: |
+          fpcres -of res -o gboxoverlay.res gboxoverlay.rc
+          mkdir -p lib/overlay
+          fpc -O2 -Fusrc/core -Fusrc/win -FUlib/overlay -oGotBoxOverlay.dll gboxshellext.lpr
+
       - name: Install UPX
         shell: pwsh
         run: choco install upx -y --no-progress
@@ -156,9 +165,10 @@ jobs:
       - name: Compress binaries (UPX)
         shell: bash
         run: |
-          upx --best --lzma gotbox.exe gotboxd.exe
+          upx --best --lzma gotbox.exe gotboxd.exe GotBoxOverlay.dll
           upx -t gotbox.exe
           upx -t gotboxd.exe
+          upx -t GotBoxOverlay.dll
 
       - name: Compute version
         shell: bash
@@ -200,7 +210,7 @@ jobs:
         run: |
           $stage = "gotbox-$env:VERSION-win64"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item gotbox.exe, gotboxd.exe, README.md $stage
+          Copy-Item gotbox.exe, gotboxd.exe, GotBoxOverlay.dll, README.md $stage
           # A real single .zip -- attached AS-IS to a release (release assets are
           # not re-wrapped), so release downloaders get one usable archive.
           New-Item -ItemType Directory -Force -Path dist | Out-Null

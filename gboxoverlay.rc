@@ -1,0 +1,8 @@
+// Icon resources for GotBoxOverlay.dll (the Windows Explorer shell overlay).
+// GetOverlayInfo points Explorer at this DLL + a zero-based icon INDEX, and the
+// shell enumerates icon resources by ascending id -- so the ids below fix the
+// index mapping: synced=0, modified=1, conflict=2 (see gboxoverlayhandler.pas
+// HandlerGetClassObject). Compiled to gboxoverlay.res by fpcres (see Makefile).
+1 ICON "assets/overlay-synced.ico"
+2 ICON "assets/overlay-modified.ico"
+3 ICON "assets/overlay-conflict.ico"

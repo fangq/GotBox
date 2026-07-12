@@ -2,6 +2,9 @@
 lib/
 backup/
 
+# Python bytecode cache (tools/make-icon.py)
+__pycache__/
+
 # installer staging + output (see .github/workflows/package.yml)
 dist/
 build/
@@ -19,6 +22,10 @@ gotboxd.exe
 
 # generated project resource (rebuilt from gotbox.rc by the Makefile)
 gotbox.res
+
+# generated overlay-DLL resource + the built shell-extension DLL (win64)
+gboxoverlay.res
+GotBoxOverlay.dll
 
 # console test binaries + their build dir
 /tests/testgit

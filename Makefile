@@ -44,7 +44,7 @@ ICONSIZES := 16 22 24 32 48 64 128 256
 PASSRC   := $(shell find src -name '*.pas')
 
 .PHONY: all build debug release tests format format-check clean distclean \
-        run hooks jcf icon install uninstall autostart linux win64 win32 macos help
+        run hooks jcf icon overlay install uninstall autostart linux win64 win32 macos help
 
 all: build
 
@@ -71,6 +71,25 @@ debug: $(RES)
 gotboxd: $(PASSRC)
 	@mkdir -p lib/gotboxd
 	$(FPC) -O2 -Fusrc/core -FUlib/gotboxd -o$@ gotboxd.lpr
+
+# ---- Windows Explorer icon-overlay DLL ------------------------------------
+# GotBoxOverlay.dll -- the in-process COM shell extension explorer.exe loads to
+# draw per-file status badges (see gboxshellext.lpr / src/win). Windows-only;
+# built for win64 with the same cross-FPC `make win64` uses. Its badge icons are
+# embedded via a dedicated resource ($(OVERLAYRES)).
+OVERLAYRES  := gboxoverlay.res
+OVERLAYICONS := assets/overlay-synced.ico assets/overlay-modified.ico assets/overlay-conflict.ico
+OVERLAYDLL  := GotBoxOverlay.dll
+
+$(OVERLAYICONS): tools/make-icon.py
+	python3 tools/make-icon.py
+
+$(OVERLAYRES): gboxoverlay.rc $(OVERLAYICONS)
+	$(FPCRES) -of res -o $(OVERLAYRES) gboxoverlay.rc
+
+overlay: $(OVERLAYRES)
+	@mkdir -p lib/overlay-win64
+	$(FPC) -Twin64 -O2 -Fusrc/core -Fusrc/win -FUlib/overlay-win64 -o$(OVERLAYDLL) gboxshellext.lpr
 
 # ---- cross builds ---------------------------------------------------------
 linux: $(RES)
@@ -145,7 +164,7 @@ clean:
 	find . -name '*.o' -o -name '*.ppu' -o -name '*.or' | xargs -r rm -f
 
 distclean: clean
-	rm -f $(BIN) $(BIN).exe gotboxd gotboxd.exe tests/testgit tests/testauth tests/testlink tests/testworker tests/testsync tests/testhistory tests/testremote tests/testsuper tests/teststray tests/testengine $(RES)
+	rm -f $(BIN) $(BIN).exe gotboxd gotboxd.exe tests/testgit tests/testauth tests/testlink tests/testworker tests/testsync tests/testhistory tests/testremote tests/testsuper tests/teststray tests/testengine tests/testfilestatus tests/testoverlayipc $(RES) $(OVERLAYRES) $(OVERLAYDLL)
 
 help:
 	@sed -n '1,30p' Makefile

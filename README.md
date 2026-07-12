@@ -81,6 +81,9 @@ other machines on a timer, and keeps the repos small by trimming old history.
   for a few files, a count for many) and alerts you to conflicts/errors.
 - **Lightweight tray app** — colored tray icon shows sync state; background
   daemon mode; optional start-on-login.
+- **File-manager status badges** *(Windows)* — optional TortoiseGit-style icon
+  overlays show per-file synced / modified / conflict status right in File
+  Explorer (see [Explorer icon overlays](#explorer-icon-overlays-windows)).
 
 ---
 
@@ -209,6 +212,7 @@ Right-click (or click) the tray icon:
 | **Settings…** | Sync folder, backend, history cap, intervals, ignore patterns, machine name, LFS threshold. |
 | **Account…** | GitHub username + token. |
 | **Export log…** | Save the activity log to a file (handy for bug reports). |
+| **Enable Explorer icon overlays…** | *(Windows only)* Turn on per-file status badges in File Explorer — see [Explorer icon overlays](#explorer-icon-overlays-windows). |
 | **About** | Version and project link. |
 | **Quit** | Stop GotBox. |
 
@@ -225,6 +229,36 @@ all your repos:
 | 🔴 | **Error** | A repo could not sync; open **Status** for details. |
 | ⚪ | **Idle / Paused** | Nothing to do, or syncing is paused. |
 | ⚫ | **Offline** | No network; changes are queued and sync resumes automatically. |
+
+### Explorer icon overlays (Windows)
+
+Like TortoiseGit, GotBox can badge files and folders in **File Explorer** with
+their sync status:
+
+| Badge | State |
+|:-----:|-------|
+| ✓ (green) | **Synced** — committed and up to date. |
+| ● (amber) | **Modified** — changed locally, not yet synced. |
+| ! (red)   | **Conflict** — needs attention (open **Status…**). |
+
+Folders show the "worst" state among the files inside them. The badges are
+served by the running GotBox process, so they only appear while GotBox is
+running — if it's stopped, Explorer simply shows no badge (it never hangs).
+
+**Enabling them** (opt-in, one-time, needs administrator rights):
+
+- During install, tick **"Enable Windows Explorer status icon overlays"**, or
+- From the tray menu choose **Enable Explorer icon overlays…**, or
+- Run `gotbox --register-overlays` (both self-elevate with a single UAC prompt).
+
+Then **restart Explorer** (sign out/in, or restart `explorer.exe`) for the
+badges to show. To turn them off, run `gotbox --unregister-overlays`
+(uninstalling GotBox does this automatically).
+
+> **Note:** Windows allows only ~15 overlay handlers total across all apps, in
+> alphabetical priority. GotBox registers its three with leading spaces to rank
+> high, but if you run many overlay providers (Dropbox, OneDrive, TortoiseGit…)
+> some may not get a slot — a Windows limitation, not a GotBox bug.
 
 ---
 

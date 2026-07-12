@@ -38,12 +38,18 @@ uses
 
   {$R *.res}
 
+var
+  ovlExit: Integer;
 begin
   if WantHelp then
   begin
     writeln(UsageText);
     Halt(0);
   end;
+  // Explorer icon-overlay (un)registration: self-elevates and exits, never
+  // starting the tray app. No-op unless --(un)register-overlays was passed.
+  if HandleOverlayRegistration(ovlExit) then
+    Halt(ovlExit);
   // Detach into the background before the widgetset/threads come up (no-op
   // without -d, and on Windows). Forking later would be unsafe.
   if WantDaemon then

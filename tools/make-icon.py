@@ -65,6 +65,32 @@ def render(n):
     return img
 
 
+def render_badge(n, kind):
+    """A small status badge for a Windows Explorer icon overlay: a filled disc
+    with a white glyph. kind is 'synced' | 'modified' | 'conflict'. Rendered big
+    then downscaled by write_ico for crisp small overlays."""
+    img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    fill = {"synced": LEFT, "modified": (243, 156, 18),   # amber
+            "conflict": (231, 76, 60)}[kind]              # red
+    pad = n * 0.06
+    ew = max(1, int(n * 0.05))
+    d.ellipse([pad, pad, n - pad, n - pad], fill=fill, outline=EDGE, width=ew)
+    W = (255, 255, 255)
+    gw = max(1, int(n * 0.11))
+    if kind == "synced":                                  # check mark
+        d.line([(n * 0.30, n * 0.52), (n * 0.44, n * 0.66), (n * 0.72, n * 0.34)],
+               fill=W, width=gw, joint="curve")
+    elif kind == "modified":                              # solid dot
+        r = n * 0.15
+        d.ellipse([n * 0.5 - r, n * 0.5 - r, n * 0.5 + r, n * 0.5 + r], fill=W)
+    else:                                                 # exclamation mark
+        d.line([(n * 0.5, n * 0.28), (n * 0.5, n * 0.58)], fill=W, width=gw)
+        r = n * 0.075
+        d.ellipse([n * 0.5 - r, n * 0.70 - r, n * 0.5 + r, n * 0.70 + r], fill=W)
+    return img
+
+
 def _dib(img):
     """Uncompressed 32-bit BGRA DIB for one ICO entry (XOR data + empty AND mask).
     Pillow stores ICO entries as PNG, which LCL's icon reader rejects ('Bitmap
@@ -113,7 +139,13 @@ def main():
         os.makedirs(d, exist_ok=True)
         master.resize((s, s), Image.LANCZOS).save(os.path.join(d, "gotbox.png"))
 
+    # status badges for the Windows Explorer icon overlays (Phase 3 DLL)
+    for kind in ("synced", "modified", "conflict"):
+        write_ico(os.path.join(ASSETS, f"overlay-{kind}.ico"),
+                  render_badge(MASTER, kind), [16, 20, 24, 32, 48])
+
     print("wrote", os.path.join(ASSETS, "gotbox.ico"),
+          "the overlay-*.ico badges,",
           "and hicolor PNGs under", os.path.join(ASSETS, "icons"))
 
 

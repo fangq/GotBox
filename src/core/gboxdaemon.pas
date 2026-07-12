@@ -39,6 +39,18 @@ function WantTakeover: Boolean;
 { Help/usage text for --help. }
 function UsageText: string;
 
+{ If --register-overlays / --unregister-overlays was passed, perform it (on
+  Windows this self-elevates via UAC and drives regsvr32 on GotBoxOverlay.dll)
+  and return True with AExitCode set to the process exit code the caller should
+  Halt with. Returns False when no overlay flag was given (caller proceeds
+  normally). On non-Windows the flags are accepted but report "Windows only". }
+function HandleOverlayRegistration(out AExitCode: Integer): Boolean;
+
+{ Register / unregister the Explorer overlay DLL directly (Windows only), self-
+  elevating as needed. Returns the resulting exit code (0 = success). Exposed so
+  the GUI's "Enable Explorer overlays" menu action can call it too. }
+function RunOverlayRegistration(AUnregister: Boolean): Integer;
+
 { Detach from the controlling terminal and run in the background (Unix/macOS).
   No-op on Windows. MUST be called at program start -- before the widgetset is
   initialized and before any worker threads are created -- because it forks. }
@@ -55,7 +67,7 @@ implementation
 uses
   Classes, SysUtils, gboxconfigstore
   {$IFDEF UNIX}, BaseUnix, ctypes{$ENDIF}
-  {$IFDEF WINDOWS}, Windows{$ENDIF};
+  {$IFDEF WINDOWS}, Windows, ShellApi{$ENDIF};
 
 function HasArg(const AShort, ALong: string): Boolean;
 var
@@ -86,6 +98,16 @@ begin
   Result := HasArg('--takeover', '--takeover');
 end;
 
+function WantRegisterOverlays: Boolean;
+begin
+  Result := HasArg('--register-overlays', '--register-overlays');
+end;
+
+function WantUnregisterOverlays: Boolean;
+begin
+  Result := HasArg('--unregister-overlays', '--unregister-overlays');
+end;
+
 function UsageText: string;
 begin
   Result :=
@@ -94,7 +116,11 @@ begin
     LineEnding + 'Options:' + LineEnding +
     '  -d, --daemon   detach from the terminal and run in the background' +
     LineEnding + '  --takeover     take over a root another GotBox instance is managing'
-    + LineEnding + '  -h, --help     show this help and exit' +
+    + LineEnding +
+    '  --register-overlays    install the Explorer icon overlays (Windows; UAC)' +
+    LineEnding +
+    '  --unregister-overlays  remove the Explorer icon overlays (Windows; UAC)' +
+    LineEnding + '  -h, --help     show this help and exit' +
     LineEnding + LineEnding +
     'For a headless host or a plain SSH session (no X display), use the ' +
     'GUI-free' + LineEnding + 'daemon instead:  gotboxd [-d]' + LineEnding;
@@ -207,6 +233,67 @@ begin
   GInstanceMutex := CreateMutex(nil, True, 'GotBox-SingleInstance');
   Result := (GInstanceMutex <> 0) and (GetLastError = ERROR_ALREADY_EXISTS);
 end;
+
+{ The overlay DLL ships next to the exe (installer drops both in the app dir). }
+function OverlayDllPath: string;
+begin
+  Result := ExtractFilePath(ParamStr(0)) + 'GotBoxOverlay.dll';
+end;
+
+function RunOverlayRegistration(AUnregister: Boolean): Integer;
+var
+  sei: TShellExecuteInfoW;
+  args, dll, verb, exe: WideString;
+  code: DWORD;
+begin
+  if not FileExists(OverlayDllPath) then
+    Exit(2);                       // nothing to (un)register
+  dll := WideString(OverlayDllPath);
+  if AUnregister then
+    args := '/u /s "' + dll + '"'
+  else
+    args := '/s "' + dll + '"';
+  verb := 'runas';                 // request elevation -> one UAC prompt
+  exe := 'regsvr32.exe';
+  FillChar(sei, SizeOf(sei), 0);
+  sei.cbSize := SizeOf(sei);
+  sei.fMask := SEE_MASK_NOCLOSEPROCESS;
+  sei.lpVerb := PWideChar(verb);
+  sei.lpFile := PWideChar(exe);
+  sei.lpParameters := PWideChar(args);
+  sei.nShow := SW_HIDE;
+  if not ShellExecuteExW(@sei) then
+    Exit(Integer(GetLastError));   // e.g. 1223 (ERROR_CANCELLED) = declined UAC
+  Result := 0;
+  if sei.hProcess <> 0 then
+  begin
+    WaitForSingleObject(sei.hProcess, 30000);
+    if GetExitCodeProcess(sei.hProcess, code) then
+      Result := Integer(code);     // regsvr32: 0 = ok
+    CloseHandle(sei.hProcess);
+  end;
+end;
+{$ELSE}
+function RunOverlayRegistration(AUnregister: Boolean): Integer;
+begin
+  Result := 1;                     // Explorer overlays are Windows-only
+end;
 {$ENDIF}
+
+function HandleOverlayRegistration(out AExitCode: Integer): Boolean;
+begin
+  AExitCode := 0;
+  Result := True;
+  if WantRegisterOverlays then
+    AExitCode := RunOverlayRegistration(False)
+  else if WantUnregisterOverlays then
+    AExitCode := RunOverlayRegistration(True)
+  else
+    Result := False;
+  {$IFNDEF WINDOWS}
+  if Result then
+    WriteLn('Explorer icon overlays are a Windows-only feature.');
+  {$ENDIF}
+end;
 
 end.

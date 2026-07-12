@@ -30,7 +30,7 @@ uses
   StdCtrls, Dialogs, LCLType, LCLIntf, IntfGraphics, GraphType, fpimage,
   gboxconfigstore, gboxstatusmodel, gboxlog,
   gboxcredstore, gboxengine, gboxsuper, gboxfilewatcher, gboxrootlock, gboxmsg,
-  gboxfilestatus, gboxoverlayipc;
+  gboxfilestatus, gboxoverlayipc, gboxdaemon;
 
 type
   TMainForm = class(TForm)
@@ -101,6 +101,7 @@ type
     procedure mnuSettings(Sender: TObject);
     procedure mnuAccount(Sender: TObject);
     procedure mnuExportLog(Sender: TObject);
+    procedure mnuEnableOverlays(Sender: TObject);
     procedure mnuAbout(Sender: TObject);
     procedure mnuQuit(Sender: TObject);
   public
@@ -314,6 +315,11 @@ begin
   AddItem('Settings...', @mnuSettings);
   AddItem('Account...', @mnuAccount);
   AddItem('Export log...', @mnuExportLog);
+  {$IFDEF WINDOWS}
+  // Explorer status badges are a Windows shell extension; registering it needs
+  // admin (one UAC prompt), so it is an explicit opt-in action, not automatic.
+  AddItem('Enable Explorer icon overlays...', @mnuEnableOverlays);
+  {$ENDIF}
   AddSep;
   AddItem('About', @mnuAbout);
   AddItem('Quit', @mnuQuit);
@@ -1057,6 +1063,27 @@ begin
   finally
     dlg.Free;
   end;
+end;
+
+procedure TMainForm.mnuEnableOverlays(Sender: TObject);
+{$IFDEF WINDOWS}
+var
+  rc: Integer;
+{$ENDIF}
+begin
+  {$IFDEF WINDOWS}
+  rc := RunOverlayRegistration(False);   // self-elevates (one UAC prompt)
+  if rc = 0 then
+    MsgInfo('Explorer icon overlays enabled.' + LineEnding + LineEnding +
+      'Restart Explorer (or sign out and back in) for the status badges to '
+      + 'appear on files under your GotBox folder.')
+  else if rc = 2 then
+    MsgError('GotBoxOverlay.dll was not found next to the program, so overlays '
+      + 'could not be enabled.')
+  else
+    MsgError('Could not enable the Explorer overlays. They require '
+      + 'administrator rights -- the elevation prompt may have been declined.');
+  {$ENDIF}
 end;
 
 procedure TMainForm.mnuAbout(Sender: TObject);
