@@ -458,6 +458,7 @@ const
   FILE_NOTIFY_CHANGE_SIZE       = $00000008;
   FILE_NOTIFY_CHANGE_LAST_WRITE = $00000010;
   FILE_FLAG_BACKUP_SEMANTICS    = $02000000;
+  FILE_FLAG_OVERLAPPED          = $40000000;
 
 type
   FILE_NOTIFY_INFORMATION = record
@@ -484,6 +485,7 @@ type
   private
     FThread: TWinWatchThread;
     FDir: THandle;
+    FStopEvent: THandle;   // manual-reset; signalled by Stop to unblock the wait
   public
     procedure Start; override;
     procedure Stop; override;
@@ -505,22 +507,47 @@ var
   off, nlen: DWORD;
   nm: WideString;
   changed: Boolean;
+  ov: TOverlapped;
+  ioEvent: THandle;
+  waits: array[0..1] of THandle;
+  wr: DWORD;
 begin
   filter := FILE_NOTIFY_CHANGE_FILE_NAME or FILE_NOTIFY_CHANGE_DIR_NAME or
     FILE_NOTIFY_CHANGE_SIZE or FILE_NOTIFY_CHANGE_LAST_WRITE;
-  while not Terminated do
-  begin
-    bytes := 0;
-    // synchronous, recursive; Stop closes the handle to unblock this call
-    if not ReadDirectoryChangesW(FOwner.FDir, @buf, SizeOf(buf), True, filter,
-      @bytes, nil, nil) then
-      Break;
-    if Terminated then Break;
-    if bytes = 0 then
+  // Overlapped (asynchronous) I/O: ReadDirectoryChangesW returns immediately and
+  // signals ioEvent on completion. We then wait on BOTH ioEvent and the owner's
+  // stop-event, so Stop can always wake us -- no dependence on CancelIoEx racing
+  // a synchronous read (the intermittent Windows shutdown deadlock).
+  ioEvent := CreateEvent(nil, True, False, nil);   // manual-reset
+  if ioEvent = 0 then Exit;
+  try
+    while not Terminated do
     begin
-      FOwner.Fire;   // buffer overflow: too many changes to enumerate
-      Continue;
-    end;
+      FillChar(ov, SizeOf(ov), 0);
+      ov.hEvent := ioEvent;
+      ResetEvent(ioEvent);
+      bytes := 0;
+      if not ReadDirectoryChangesW(FOwner.FDir, @buf, SizeOf(buf), True, filter,
+        @bytes, @ov, nil) then
+        Break;
+      waits[0] := ioEvent;
+      waits[1] := FOwner.FStopEvent;
+      wr := WaitForMultipleObjects(2, PWOHandleArray(@waits[0]), False, INFINITE);
+      if Terminated or (wr <> WAIT_OBJECT_0) then
+      begin
+        // stop requested (or wait failed): abort the pending read and leave
+        CancelIoEx(FOwner.FDir, @ov);
+        GetOverlappedResult(FOwner.FDir, ov, bytes, True);   // drain
+        Break;
+      end;
+      // a change completed; fetch how many bytes were written
+      if not GetOverlappedResult(FOwner.FDir, ov, bytes, False) then
+        Continue;
+      if bytes = 0 then
+      begin
+        FOwner.Fire;   // buffer overflow: too many changes to enumerate
+        Continue;
+      end;
 
     changed := False;
     off := 0;
@@ -545,21 +572,27 @@ begin
       off := off + info^.NextEntryOffset;
     end;
 
-    if changed then FOwner.Fire;
+      if changed then FOwner.Fire;
+    end;
+  finally
+    CloseHandle(ioEvent);
   end;
 end;
 
 procedure TWinFileWatcher.Start;
 begin
   if Assigned(FThread) then Exit;
+  // FILE_FLAG_OVERLAPPED: the watch thread issues asynchronous reads so it can
+  // wait on the completion event AND a stop-event together (see Execute).
   FDir := CreateFileW(PWideChar(WideString(FRoot)), GENERIC_READ,
     FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE, nil,
-    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0);
+    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS or FILE_FLAG_OVERLAPPED, 0);
   if FDir = INVALID_HANDLE_VALUE then
   begin
     if Assigned(Log) then Log.Warn('watch', 'could not open dir for watching');
     Exit;
   end;
+  FStopEvent := CreateEvent(nil, True, False, nil);   // manual-reset
   FThread := TWinWatchThread.Create(True);
   FThread.FOwner := Self;
   FThread.FreeOnTerminate := False;
@@ -567,36 +600,15 @@ begin
 end;
 
 procedure TWinFileWatcher.Stop;
-var
-  spins: Integer;
 begin
   if Assigned(FThread) then
   begin
     FThread.Terminate;
-    // Unblock the synchronous ReadDirectoryChangesW. CancelIoEx only aborts I/O
-    // that is ALREADY pending, so a single call loses a race: if Stop runs just
-    // after the thread's `while not Terminated` check but before it (re)enters
-    // ReadDirectoryChangesW, the cancel finds nothing, the thread then blocks on
-    // a call that no change will ever satisfy, and WaitFor hangs forever -- which
-    // froze the owning sync worker's shutdown and, in turn, engine.Stop (the
-    // intermittent Windows testmultisync hang). Cancel repeatedly until the
-    // thread actually leaves Execute; bounded so Stop itself can never hang.
-    spins := 0;
-    while not FThread.Finished do
-    begin
-      if (FDir <> 0) and (FDir <> INVALID_HANDLE_VALUE) then
-        CancelIoEx(FDir, nil);
-      Sleep(10);
-      Inc(spins);
-      if spins >= 500 then     // ~5 s hard cap; fall through to the handle close
-      begin
-        // last resort: closing the handle also aborts a pending read
-        if (FDir <> 0) and (FDir <> INVALID_HANDLE_VALUE) then
-          CloseHandle(FDir);
-        FDir := INVALID_HANDLE_VALUE;
-        Break;
-      end;
-    end;
+    // Wake the thread's WaitForMultipleObjects immediately: with overlapped I/O
+    // this cannot race (the manual-reset event stays signalled), so the thread
+    // always aborts its pending read and exits -- Stop (and thus the owning sync
+    // worker + engine.Stop) can never hang.
+    if FStopEvent <> 0 then SetEvent(FStopEvent);
     FThread.WaitFor;
     FreeAndNil(FThread);
   end;
@@ -604,6 +616,11 @@ begin
   begin
     CloseHandle(FDir);
     FDir := INVALID_HANDLE_VALUE;
+  end;
+  if FStopEvent <> 0 then
+  begin
+    CloseHandle(FStopEvent);
+    FStopEvent := 0;
   end;
 end;
 {$ENDIF}
