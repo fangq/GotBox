@@ -81,9 +81,11 @@ other machines on a timer, and keeps the repos small by trimming old history.
   for a few files, a count for many) and alerts you to conflicts/errors.
 - **Lightweight tray app** — colored tray icon shows sync state; background
   daemon mode; optional start-on-login.
-- **File-manager status badges** *(Windows)* — optional TortoiseGit-style icon
-  overlays show per-file synced / modified / conflict status right in File
-  Explorer (see [Explorer icon overlays](#explorer-icon-overlays-windows)).
+- **File-manager status badges** *(Windows & macOS)* — optional
+  TortoiseGit/Dropbox-style icon overlays show per-file synced / modified /
+  conflict status right in File Explorer / Finder (see
+  [Explorer icon overlays](#explorer-icon-overlays-windows) and
+  [Finder icon overlays](#finder-icon-overlays-macos)).
 
 ---
 
@@ -212,7 +214,7 @@ Right-click (or click) the tray icon:
 | **Settings…** | Sync folder, backend, history cap, intervals, ignore patterns, machine name, LFS threshold. |
 | **Account…** | GitHub username + token. |
 | **Export log…** | Save the activity log to a file (handy for bug reports). |
-| **Enable Explorer icon overlays…** | *(Windows only)* Turn on per-file status badges in File Explorer — see [Explorer icon overlays](#explorer-icon-overlays-windows). |
+| **Enable Explorer icon overlays…** / **Finder icon overlays…** | Turn on per-file status badges in your file manager (*Explorer* on Windows, *Finder* on macOS) — see [Explorer](#explorer-icon-overlays-windows) / [Finder](#finder-icon-overlays-macos) overlays. |
 | **About** | Version and project link. |
 | **Quit** | Stop GotBox. |
 
@@ -259,6 +261,26 @@ badges to show. To turn them off, run `gotbox --unregister-overlays`
 > alphabetical priority. GotBox registers its three with leading spaces to rank
 > high, but if you run many overlay providers (Dropbox, OneDrive, TortoiseGit…)
 > some may not get a slot — a Windows limitation, not a GotBox bug.
+
+### Finder icon overlays (macOS)
+
+On macOS the same synced / modified / conflict badges appear in **Finder**, via
+a Finder Sync extension bundled inside `GotBox.app`. As on Windows, folders roll
+up to their worst state, and the badges only show while GotBox is running.
+
+**Enabling them** (opt-in, one-time — no administrator needed):
+
+1. Move **GotBox.app** to `/Applications` and launch it once, so macOS registers
+   the bundled extension.
+2. Open **System Settings → General → Login Items & Extensions → Finder** (older
+   macOS: *System Preferences → Extensions*) and tick **GotBox** — or use the
+   tray menu's **Finder icon overlays…** item, which opens that pane for you.
+3. Restart Finder: log out and back in, or run `killall Finder`.
+
+> **Note:** the current macOS build is **not notarized**, so the Finder
+> extension loads only on a machine that built it itself, or where you manually
+> allow it under *Settings → Privacy & Security*. A signed + notarized build (so
+> overlays work straight from a downloaded `.dmg`) is a planned follow-up.
 
 ---
 

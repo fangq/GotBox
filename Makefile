@@ -44,7 +44,7 @@ ICONSIZES := 16 22 24 32 48 64 128 256
 PASSRC   := $(shell find src -name '*.pas')
 
 .PHONY: all build debug release tests format format-check clean distclean \
-        run hooks jcf icon overlay install uninstall autostart linux win64 win32 macos help
+        run hooks jcf icon overlay finder install uninstall autostart linux win64 win32 macos help
 
 all: build
 
@@ -90,6 +90,13 @@ $(OVERLAYRES): gboxoverlay.rc $(OVERLAYICONS)
 overlay: $(OVERLAYRES)
 	@mkdir -p lib/overlay-win64
 	$(FPC) -Twin64 -O2 -Fusrc/core -Fusrc/win -FUlib/overlay-win64 -o$(OVERLAYDLL) gboxshellext.lpr
+
+# ---- macOS Finder Sync extension ------------------------------------------
+# GotBoxFinder.appex -- the Finder status-badge extension (src/mac +
+# packaging/macos/build-appex.sh). macOS only (needs Cocoa/FinderSync +
+# codesign); the badge PNGs come from make-icon.py.
+finder: $(OVERLAYICONS)
+	FPC="$(FPC)" packaging/macos/build-appex.sh $(CURDIR)
 
 # ---- cross builds ---------------------------------------------------------
 linux: $(RES)
@@ -165,6 +172,7 @@ clean:
 
 distclean: clean
 	rm -f $(BIN) $(BIN).exe gotboxd gotboxd.exe tests/testgit tests/testauth tests/testlink tests/testworker tests/testsync tests/testhistory tests/testremote tests/testsuper tests/teststray tests/testengine tests/testfilestatus tests/testoverlayipc $(RES) $(OVERLAYRES) $(OVERLAYDLL)
+	rm -rf GotBoxFinder.appex
 
 help:
 	@sed -n '1,30p' Makefile

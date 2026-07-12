@@ -102,6 +102,7 @@ type
     procedure mnuAccount(Sender: TObject);
     procedure mnuExportLog(Sender: TObject);
     procedure mnuEnableOverlays(Sender: TObject);
+    procedure mnuFinderOverlays(Sender: TObject);
     procedure mnuAbout(Sender: TObject);
     procedure mnuQuit(Sender: TObject);
   public
@@ -319,6 +320,11 @@ begin
   // Explorer status badges are a Windows shell extension; registering it needs
   // admin (one UAC prompt), so it is an explicit opt-in action, not automatic.
   AddItem('Enable Explorer icon overlays...', @mnuEnableOverlays);
+  {$ENDIF}
+  {$IFDEF DARWIN}
+  // Finder status badges come from an app extension the user enables once in
+  // System Settings; this item just points them there.
+  AddItem('Finder icon overlays...', @mnuFinderOverlays);
   {$ENDIF}
   AddSep;
   AddItem('About', @mnuAbout);
@@ -1083,6 +1089,19 @@ begin
   else
     MsgError('Could not enable the Explorer overlays. They require '
       + 'administrator rights -- the elevation prompt may have been declined.');
+  {$ENDIF}
+end;
+
+procedure TMainForm.mnuFinderOverlays(Sender: TObject);
+begin
+  {$IFDEF DARWIN}
+  MsgInfo('GotBox can show sync-status badges in Finder via a Finder extension.'
+    + LineEnding + LineEnding
+    + 'In the window that opens, enable "GotBox" under Finder extensions, then '
+    + 'restart Finder (log out and back in, or run: killall Finder).'
+    + LineEnding + LineEnding
+    + 'Badges appear on files under your GotBox folder while GotBox is running.');
+  OpenURL('x-apple.systempreferences:com.apple.ExtensionsPreferences');
   {$ENDIF}
 end;
 

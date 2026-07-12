@@ -139,13 +139,18 @@ def main():
         os.makedirs(d, exist_ok=True)
         master.resize((s, s), Image.LANCZOS).save(os.path.join(d, "gotbox.png"))
 
-    # status badges for the Windows Explorer icon overlays (Phase 3 DLL)
+    # status badges for the file-manager icon overlays
     for kind in ("synced", "modified", "conflict"):
+        badge = render_badge(MASTER, kind)
+        # Windows Explorer overlay DLL wants .ico
         write_ico(os.path.join(ASSETS, f"overlay-{kind}.ico"),
-                  render_badge(MASTER, kind), [16, 20, 24, 32, 48])
+                  badge, [16, 20, 24, 32, 48])
+        # macOS Finder Sync extension wants an NSImage-loadable .png
+        badge.resize((128, 128), Image.LANCZOS).save(
+            os.path.join(ASSETS, f"overlay-{kind}.png"))
 
     print("wrote", os.path.join(ASSETS, "gotbox.ico"),
-          "the overlay-*.ico badges,",
+          "the overlay-*.ico / overlay-*.png badges,",
           "and hicolor PNGs under", os.path.join(ASSETS, "icons"))
 
 

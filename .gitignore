@@ -27,6 +27,9 @@ gotbox.res
 gboxoverlay.res
 GotBoxOverlay.dll
 
+# built macOS Finder Sync extension bundle (packaging/macos/build-appex.sh)
+GotBoxFinder.appex/
+
 # console test binaries + their build dir
 /tests/testgit
 /tests/testauth

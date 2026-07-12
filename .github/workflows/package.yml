@@ -276,6 +276,11 @@ jobs:
           echo "VERSION=$ver" >> "$GITHUB_ENV"
           echo "building version $ver"
 
+      # The Finder Sync extension (status badges). Compile/package gate only --
+      # the runner can build + ad-hoc sign it, but cannot test Finder loading.
+      - name: Build Finder Sync extension (GotBoxFinder.appex)
+        run: VERSION="$VERSION" packaging/macos/build-appex.sh "$PWD"
+
       - name: Build .app bundle + .dmg
         run: |
           set -eu
@@ -299,6 +304,16 @@ jobs:
           chmod +x "$app/Contents/MacOS/gotboxd"
           sed "s/__VERSION__/${VERSION}/g" packaging/macos/Info.plist \
               > "$app/Contents/Info.plist"
+
+          # embed the Finder Sync extension so Finder discovers it once the app
+          # is in /Applications and launched
+          mkdir -p "$app/Contents/PlugIns"
+          cp -R GotBoxFinder.appex "$app/Contents/PlugIns/"
+
+          # ad-hoc sign the whole bundle (extension included) so it can load on
+          # the building / self-built machine; downloaded-.dmg users need a
+          # Developer ID + notarization (documented as a future step)
+          codesign -s - --force --deep "$app" || true
 
           # drag-to-install layout
           ln -s /Applications "$stage/Applications"
