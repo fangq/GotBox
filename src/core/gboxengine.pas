@@ -41,6 +41,7 @@ type
     FStatus: TStatusModel;
     FWorkers: array of TRepoWorker;
     FRunning: Boolean;
+    FTransitioning: Boolean;   // inside Stop/Start -- block reentrant reconcile
     FOnNotice: TSyncNoticeEvent;
     FStatusCache: TStatusCache;   // borrowed; feeds the file-manager overlay
     FSubNames: TStringList;    // submodule local names managed at last Start (sorted)
@@ -147,6 +148,14 @@ end;
 
 procedure TSyncEngine.DoReconcile;
 begin
+  // CRITICAL: on Windows, TThread.WaitFor on the main thread pumps
+  // CheckSynchronize (MsgWaitForMultipleObjects + QS_SENDMESSAGE), so a
+  // DoReconcile queued by a worker can fire *inside* engine.Stop's WaitFor. If
+  // it ran a nested Stop/Start it would free/replace FWorkers out from under the
+  // outer Stop's loop -> WaitFor on a dead worker (hang) or a freed object
+  // (crash). Skip while a Stop/Start is already in flight; the reconcile is
+  // re-driven on the next worker cycle anyway.
+  if FTransitioning then Exit;
   ReconcileIfChanged;
 end;
 
@@ -392,17 +401,25 @@ var
   i: Integer;
 begin
   if not FRunning and (Length(FWorkers) = 0) then Exit;
-  for i := 0 to High(FWorkers) do
-    FWorkers[i].Stop;
-  for i := 0 to High(FWorkers) do
-  begin
-    EngTrace(Format('Stop: WaitFor worker %d (%s)', [i, FWorkers[i].RepoName]));
-    FWorkers[i].WaitFor;
-    EngTrace(Format('Stop: worker %d (%s) joined', [i, FWorkers[i].RepoName]));
-    FWorkers[i].Free;
+  // FTransitioning is held across the whole teardown: WaitFor below pumps
+  // CheckSynchronize on Windows, so a queued DoReconcile could otherwise reenter
+  // Stop/Start and corrupt FWorkers mid-loop (see DoReconcile).
+  FTransitioning := True;
+  try
+    for i := 0 to High(FWorkers) do
+      FWorkers[i].Stop;
+    for i := 0 to High(FWorkers) do
+    begin
+      EngTrace(Format('Stop: WaitFor worker %d (%s)', [i, FWorkers[i].RepoName]));
+      FWorkers[i].WaitFor;
+      EngTrace(Format('Stop: worker %d (%s) joined', [i, FWorkers[i].RepoName]));
+      FWorkers[i].Free;
+    end;
+    SetLength(FWorkers, 0);
+    FRunning := False;
+  finally
+    FTransitioning := False;
   end;
-  SetLength(FWorkers, 0);
-  FRunning := False;
   if Assigned(Log) then Log.Info('engine', 'stopped');
 end;
 
