@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=GotBox
+Comment=Start GotBox file sync in the background
+Exec=gotbox -d
+Icon=gotbox
+Terminal=false
+Categories=Utility;Network;
+X-GNOME-Autostart-enabled=true
+StartupWMClass=gotbox

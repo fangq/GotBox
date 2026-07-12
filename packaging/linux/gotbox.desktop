@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=GotBox
+GenericName=File Sync
+Comment=Dropbox-like file sync over GitHub private repos
+Exec=gotbox
+Icon=gotbox
+Terminal=false
+Categories=Utility;Network;FileTransfer;
+Keywords=sync;git;github;backup;dropbox;
+StartupWMClass=gotbox

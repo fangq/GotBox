@@ -1,0 +1,81 @@
+object LoginForm: TLoginForm
+  Left = 0
+  Height = 230
+  Top = 0
+  Width = 420
+  BorderStyle = bsDialog
+  Caption = 'GotBox - GitHub account'
+  ClientHeight = 230
+  ClientWidth = 420
+  Position = poScreenCenter
+  LCLVersion = '4.2.0.0'
+  object lblUser: TLabel
+    Left = 24
+    Height = 16
+    Top = 24
+    Width = 110
+    Caption = 'GitHub username'
+  end
+  object eUser: TEdit
+    Left = 24
+    Height = 28
+    Top = 44
+    Width = 372
+    TabOrder = 0
+  end
+  object lblPat: TLabel
+    Left = 24
+    Height = 16
+    Top = 84
+    Width = 160
+    Caption = 'Personal Access Token'
+  end
+  object ePat: TEdit
+    Left = 24
+    Height = 28
+    Top = 104
+    Width = 372
+    EchoMode = emPassword
+    PasswordChar = '*'
+    TabOrder = 1
+  end
+  object lblHint: TLabel
+    Left = 24
+    Height = 16
+    Top = 140
+    Width = 230
+    Caption = 'Token needs the "repo" scope.'
+  end
+  object lnkToken: TLabel
+    Cursor = crHandPoint
+    Left = 24
+    Height = 16
+    Top = 160
+    Width = 180
+    Caption = 'Create a token on GitHub...'
+    Font.Color = clBlue
+    Font.Style = [fsUnderline]
+    ParentFont = False
+    OnClick = lnkTokenClick
+  end
+  object btnValidate: TButton
+    Left = 200
+    Height = 32
+    Top = 188
+    Width = 130
+    Caption = 'Validate && Save'
+    Default = True
+    OnClick = btnValidateClick
+    TabOrder = 2
+  end
+  object btnCancel: TButton
+    Left = 338
+    Height = 32
+    Top = 188
+    Width = 58
+    Cancel = True
+    Caption = 'Cancel'
+    ModalResult = 2
+    TabOrder = 3
+  end
+end

@@ -1,0 +1,35 @@
+# Lazarus / FPC build artifacts
+lib/
+backup/
+
+# installer staging + output (see .github/workflows/package.yml)
+dist/
+build/
+*.o
+*.ppu
+*.compiled
+*.or
+*.dbg
+*.lps
+gotbox
+gotbox.exe
+gotbox.app/
+gotboxd
+gotboxd.exe
+
+# generated project resource (rebuilt from gotbox.rc by the Makefile)
+gotbox.res
+
+# console test binaries + their build dir
+/tests/testgit
+/tests/testauth
+/tests/testlink
+/tests/testworker
+/tests/testsync
+/tests/testhistory
+/tests/testremote
+/tests/testsuper
+/tests/teststray
+/tests/testengine
+/tests/testmultisync
+/tests/lib/

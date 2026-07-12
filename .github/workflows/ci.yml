@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pin macOS to 14 (Sonoma): setup-lazarus' prebuilt Lazarus .pkg installs
+        # there, but the newer macos-latest (now macOS 15 / Sequoia) installer
+        # rejects it as "incompatible with this version of macOS". macos-14 is the
+        # image these jobs last passed on, before GitHub rolled macos-latest fwd.
+        os: [ubuntu-latest, windows-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v5
+
+      # installs FPC + Lazarus (LCL) and puts fpc/lazbuild/fpcres on PATH
+      - name: Install Lazarus + FPC
+        uses: gcarreno/setup-lazarus@v3.4.1
+        with:
+          lazarus-version: stable
+
+      - name: Tool versions
+        shell: bash
+        run: |
+          fpc -iV
+          lazbuild --version
+          git --version
+
+      # generated from gotbox.rc so a fresh checkout builds (see Makefile)
+      - name: Generate project resource
+        shell: bash
+        run: fpcres -of res -o gotbox.res gotbox.rc
+
+      # compiles gboxfilewatcher with this OS's native backend
+      # (inotify / ReadDirectoryChangesW / FSEvents); Release mode also exercises
+      # the optimized + smart-linked + stripped build path
+      - name: Build GUI app
+        shell: bash
+        run: lazbuild --build-mode=Release gotbox.lpi
+
+      # builds + runs the console suite; each test is run under a hard timeout
+      - name: Build & run tests
+        shell: bash
+        run: tests/run.sh
+
+  # Verify the project still compiles on the older Lazarus that ships with
+  # Ubuntu 22.04 (Lazarus 2.2 / FPC 3.2.x) via apt -- covers Lazarus 2.x users.
+  compat-lazarus2:
+    name: compat (ubuntu 22.04 / lazarus 2.2)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Lazarus 2.2 + FPC (jammy apt)
+        run: |
+          sudo apt-get update
+          # full install (recommends bring the FCL unit packages LCL needs, e.g.
+          # fasthtmlparser); apt's Lazarus ships LCL as source, so lazbuild has
+          # to compile it -- chown the dir so the build user can write there.
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y lazarus
+          sudo chown -R "$(id -u):$(id -g)" /usr/lib/lazarus
+          fpc -iV
+          lazbuild --version | tail -1
+      - name: Generate project resource
+        run: fpcres -of res -o gotbox.res gotbox.rc
+      # default (debug) mode -- only checking the sources compile on Lazarus 2.x
+      - name: Build GUI app
+        run: lazbuild gotbox.lpi
+      - name: Build & run tests
+        run: tests/run.sh
+
+  format:
+    name: format check (jcf)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Lazarus + FPC
+        uses: gcarreno/setup-lazarus@v3.4.1
+        with:
+          lazarus-version: stable
+      # best-effort: JCF is built from the Lazarus component sources, whose path
+      # varies by installer; don't fail the workflow if it can't be located.
+      - name: Build JCF formatter
+        continue-on-error: true
+        run: tools/install-jcf.sh
+      - name: Check formatting
+        continue-on-error: true
+        run: make format-check

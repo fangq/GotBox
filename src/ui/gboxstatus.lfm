@@ -1,0 +1,83 @@
+object StatusForm: TStatusForm
+  Left = 0
+  Height = 470
+  Top = 0
+  Width = 600
+  Caption = 'GotBox - Status'
+  ClientHeight = 470
+  ClientWidth = 600
+  Position = poScreenCenter
+  OnCreate = FormCreate
+  LCLVersion = '4.2.0.0'
+  object grid: TStringGrid
+    Left = 12
+    Height = 180
+    Top = 12
+    Width = 576
+    Anchors = [akTop, akLeft, akRight]
+    ColCount = 4
+    FixedCols = 0
+    RowCount = 1
+    Options = [goFixedHorzLine, goFixedVertLine, goHorzLine, goVertLine, goRowSelect]
+    TabOrder = 0
+    ColWidths = (
+      240
+      110
+      90
+      130
+    )
+  end
+  object btnPause: TButton
+    Left = 12
+    Height = 30
+    Top = 200
+    Width = 130
+    Anchors = [akTop, akLeft]
+    Caption = 'Pause / Resume'
+    OnClick = btnPauseClick
+    TabOrder = 1
+  end
+  object btnSync: TButton
+    Left = 150
+    Height = 30
+    Top = 200
+    Width = 110
+    Anchors = [akTop, akLeft]
+    Caption = 'Sync now'
+    OnClick = btnSyncClick
+    TabOrder = 2
+  end
+  object btnOpen: TButton
+    Left = 268
+    Height = 30
+    Top = 200
+    Width = 110
+    Anchors = [akTop, akLeft]
+    Caption = 'Open folder'
+    OnClick = btnOpenClick
+    TabOrder = 3
+  end
+  object lblLog: TLabel
+    Left = 12
+    Height = 16
+    Top = 244
+    Width = 80
+    Caption = 'Activity log'
+  end
+  object mLog: TMemo
+    Left = 12
+    Height = 196
+    Top = 264
+    Width = 576
+    Anchors = [akTop, akLeft, akRight, akBottom]
+    ReadOnly = True
+    ScrollBars = ssAutoBoth
+    TabOrder = 4
+  end
+  object refreshTimer: TTimer
+    Interval = 1500
+    OnTimer = refreshTimerTimer
+    Left = 540
+    Top = 8
+  end
+end

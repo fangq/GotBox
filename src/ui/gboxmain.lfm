@@ -1,0 +1,23 @@
+object MainForm: TMainForm
+  Left = 0
+  Height = 120
+  Top = 0
+  Width = 240
+  Caption = 'GotBox'
+  ClientHeight = 120
+  ClientWidth = 240
+  OnCreate = FormCreate
+  OnDestroy = FormDestroy
+  LCLVersion = '4.2.0.0'
+  Visible = False
+  object TrayIcon: TTrayIcon
+    PopUpMenu = TrayMenu
+    OnDblClick = TrayIconDblClick
+    Left = 24
+    Top = 16
+  end
+  object TrayMenu: TPopupMenu
+    Left = 96
+    Top = 16
+  end
+end
