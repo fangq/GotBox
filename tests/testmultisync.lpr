@@ -57,6 +57,7 @@ uses
 var
   failures: Integer = 0;
   engine1, engine2, engine3: TSyncEngine;
+  progStart: QWord = 0;   // GetTickCount64 at program start (for Step timing)
 
   procedure Check(ACond: Boolean; const AName: string);
   begin
@@ -74,7 +75,7 @@ var
     is essential: redirected stdout is block-buffered and would be lost on kill. }
   procedure Step(const AMsg: string);
   begin
-    WriteLn('== STEP: ', AMsg);
+    WriteLn('== STEP: [', (GetTickCount64 - progStart) div 1000, 's] ', AMsg);
     Flush(Output);
   end;
 
@@ -246,6 +247,7 @@ var
   end;
 
 begin
+  progStart := GetTickCount64;
   Randomize;
   base := IncludeTrailingPathDelimiter(GetTempDir) + 'gotbox-multi-' +
     FormatDateTime('yyyymmddhhnnsszzz', Now) + '-' + IntToStr(Random(99999));
@@ -621,10 +623,15 @@ begin
     Check(FileHas(root2, 'tw_from3.txt', 'tw-from-m3'),
       'm3 change reached m2 (3-way)');
 
+    Step('phase 9: stop engine1');
     engine1.Stop;
+    Step('phase 9: stop engine2');
     engine2.Stop;
+    Step('phase 9: stop engine3');
     engine3.Stop;
+    Step('phase 9: engines stopped');
   finally
+    Step('teardown: free engines');
     engine1.Free;
     engine2.Free;
     engine3.Free;

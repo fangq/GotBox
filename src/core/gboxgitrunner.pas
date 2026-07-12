@@ -220,6 +220,22 @@ end;
 
 { ---- core runner ---- }
 
+{ Opt-in git-op trace (set GOTBOX_GIT_TRACE=1). Prints one line to stderr when an
+  op starts and one when it ends, with the thread id, elapsed ms and a TIMEOUT
+  flag. A hung op leaves a dangling "GIT>" with no matching "GIT<", so the tail
+  of a captured log names the exact stalling command + repo. Cached so we read
+  the env once. Diagnostic only -- off by default, no I/O in normal runs. }
+var
+  gGitTrace: Integer = -1;   // -1 unknown, 0 off, 1 on
+
+function GitTraceOn: Boolean;
+begin
+  if gGitTrace < 0 then
+    if GetEnvironmentVariable('GOTBOX_GIT_TRACE') <> '' then gGitTrace := 1
+    else gGitTrace := 0;
+  Result := gGitTrace = 1;
+end;
+
 function TGitRunner.Run(const AArgs: array of string; ATimeoutMs: Integer): TGitResult;
 var
   proc: TProcess;
@@ -227,7 +243,7 @@ var
   buf: array[0..4095] of Byte;
   n: LongInt;
   i: Integer;
-  cmdline: string;
+  cmdline, trace: string;
   started: TDateTime;
   timedOut: Boolean;
 begin
@@ -280,6 +296,12 @@ begin
     proc.Execute;
     started := Now;
     timedOut := False;
+    if GitTraceOn then
+    begin
+      trace := Format('GIT> [t%u] %s [%s]', [PtrUInt(GetThreadID), cmdline, FWorkDir]);
+      WriteLn(StdErr, trace);
+      Flush(StdErr);
+    end;
     // drain both pipes until the process exits and no bytes remain
     repeat
       n := proc.Output.NumBytesAvailable;
@@ -326,6 +348,14 @@ begin
     end;
     if (not Result.Ok) and (not FQuiet) and Assigned(Log) then
       Log.Warn('git', Format('exit %d: %s', [Result.ExitCode, Trim(Result.StdErr)]));
+    if GitTraceOn then
+    begin
+      trace := Format('GIT< [t%u] exit=%d %dms%s %s', [PtrUInt(GetThreadID),
+        Result.ExitCode, MilliSecondsBetween(Now, started),
+        BoolToStr(timedOut, ' TIMEOUT', ''), cmdline]);
+      WriteLn(StdErr, trace);
+      Flush(StdErr);
+    end;
   finally
     outStream.Free;
     errStream.Free;

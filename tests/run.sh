@@ -21,6 +21,11 @@ mkdir -p "$OUT"
 export GIT_CONFIG_GLOBAL="$PWD/$OUT/empty.gitconfig"
 export GIT_CONFIG_SYSTEM="$PWD/$OUT/empty.gitconfig"
 
+# Diagnostic: trace every git op (start/end, thread id, elapsed ms, TIMEOUT flag)
+# to stderr so a hung op leaves a dangling "GIT>" line -- the failure tail then
+# names the exact stalling command + repo. Cheap; unset GOTBOX_GIT_TRACE to mute.
+export GOTBOX_GIT_TRACE="${GOTBOX_GIT_TRACE:-1}"
+
 # Build the headless daemon so the binary end-to-end test (teste2e) can launch
 # it. It is LCL-free (pure src/core), so a plain FPC build suffices. If this
 # fails, teste2e skips itself rather than failing the suite.
@@ -85,11 +90,11 @@ for t in $TESTS; do
     printf 'PASS  %-12s %2ds\n' "$t" "$dur"
   elif [ "$rc" -eq 124 ]; then
     printf 'TIMEOUT %-10s (>%ss)\n' "$t" "$cap"
-    tail -8 "$OUT/$t.run.log"
+    tail -25 "$OUT/$t.run.log"
     fail=1
   else
     printf 'FAIL  %-12s (exit %d)\n' "$t" "$rc"
-    tail -8 "$OUT/$t.run.log"
+    tail -25 "$OUT/$t.run.log"
     fail=1
   fi
 done
