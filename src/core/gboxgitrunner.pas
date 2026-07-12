@@ -36,12 +36,13 @@ const
   { Network git ops (fetch/push/pull/clone/ls-remote) abort after this long
     instead of hanging on a stalled connection. }
   GIT_NET_TIMEOUT_MS = 60000;
-  { Backstop for ANY git op that doesn't pass its own timeout, once Default
-    TimeoutMs is set on the runner. A local op that runs this long is stuck
+  { Backstop for ANY git op that doesn't pass its own timeout. Applied by the
+    TGitRunner constructor, so every op is bounded unless a caller explicitly
+    opts out (DefaultTimeoutMs := 0). A local op that runs this long is stuck
     (e.g. a Windows file-lock deadlock on a shared repo); killing it lets a
-    worker's cycle end so engine.Stop's join can't hang forever. 60s matches the
-    network cap (proven safe on the ~10x-slower Windows CI) and is well above any
-    real local op on these small repos. }
+    worker's cycle -- or a main-thread reconcile -- end instead of hanging
+    forever. 60s matches the network cap (proven safe on the ~10x-slower Windows
+    CI) and is well above any real local op on these small repos. }
   GIT_DEFAULT_TIMEOUT_MS = 60000;
 
 type
@@ -208,6 +209,13 @@ begin
   inherited Create;
   FWorkDir := AWorkDir;
   FGitExe := DetectGit;
+  // Universal backstop: EVERY op is bounded unless a caller opts out by setting
+  // DefaultTimeoutMs := 0. Previously only three call sites set this, leaving the
+  // submodule/reconcile paths (gboxsuper, repolink, remote) unbounded -- and
+  // because reconcile runs on the main thread (TThread.Queue -> CheckSynchronize),
+  // one stuck git op there froze the engine's main thread indefinitely (the
+  // intermittent Windows-CI hang in testmultisync's phase-8 catch-up).
+  FDefaultTimeoutMs := GIT_DEFAULT_TIMEOUT_MS;
 end;
 
 { ---- core runner ---- }
