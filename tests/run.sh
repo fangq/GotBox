@@ -92,6 +92,8 @@ for t in $TESTS; do
     printf 'TIMEOUT %-10s (>%ss)\n' "$t" "$cap"
     echo "  last STEP: $(grep -a '== STEP:' "$OUT/$t.run.log" | tail -1)"
     echo "  dangling GIT> (started, never finished): $(grep -a 'GIT> ' "$OUT/$t.run.log" | tail -1)"
+    echo "  --- last engine (ENG:) events (git trace floods the plain tail) ---"
+    grep -a 'ENG: ' "$OUT/$t.run.log" | tail -10
     tail -25 "$OUT/$t.run.log"
     fail=1
   else
