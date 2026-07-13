@@ -57,18 +57,27 @@ type
 implementation
 
 uses
+  {$IFDEF UNIX}BaseUnix,{$ENDIF}
   Classes, SysUtils, Process, base64, gboxconfigstore, gboxlog;
 
-{ Run a process, optionally feeding AInput to stdin, capturing stdout.
+type
+  TStringArray = array of string;   // secret-tool env override list
+
+{ Run a process, optionally feeding AInput to stdin, capturing stdout. When
+  AEnvOverride is non-empty (each 'NAME=VALUE'), the child gets the current
+  environment with those names overridden/added; otherwise it inherits ours.
   Returns exit code; AOut receives stdout. }
-function RunCapture(const AExe: string; const AArgs: array of string;
-  const AInput: string; out AOut: string): Integer;
+function RunCaptureEnv(const AExe: string; const AArgs: array of string;
+  const AInput: string; out AOut: string;
+  const AEnvOverride: array of string): Integer;
 var
   proc: TProcess;
   outStream: TStringStream;
   buf: array[0..2047] of Byte;
   n: Integer;
-  i: Integer;
+  i, j: Integer;
+  envName, cur, curName: string;
+  taken: array of Boolean;
 begin
   Result := -1;
   AOut := '';
@@ -78,6 +87,31 @@ begin
     proc.Executable := AExe;
     for i := 0 to High(AArgs) do
       proc.Parameters.Add(AArgs[i]);
+    // Build a full environment (TProcess.Environment REPLACES, not merges) when
+    // overrides are requested: copy ours, then apply each override.
+    if Length(AEnvOverride) > 0 then
+    begin
+      SetLength(taken, Length(AEnvOverride));
+      for i := 0 to High(taken) do taken[i] := False;
+      for i := 1 to GetEnvironmentVariableCount do
+      begin
+        cur := GetEnvironmentString(i);
+        curName := Copy(cur, 1, Pos('=', cur) - 1);
+        for j := 0 to High(AEnvOverride) do
+        begin
+          envName := Copy(AEnvOverride[j], 1, Pos('=', AEnvOverride[j]) - 1);
+          if (envName <> '') and SameText(curName, envName) then
+          begin
+            cur := AEnvOverride[j];   // override this one
+            taken[j] := True;
+            Break;
+          end;
+        end;
+        proc.Environment.Add(cur);
+      end;
+      for j := 0 to High(AEnvOverride) do
+        if not taken[j] then proc.Environment.Add(AEnvOverride[j]);   // add new
+    end;
     proc.Options := [poUsePipes, poNoConsole];
     try
       proc.Execute;
@@ -112,10 +146,51 @@ begin
   end;
 end;
 
+{ Inherit our environment unchanged. }
+function RunCapture(const AExe: string; const AArgs: array of string;
+  const AInput: string; out AOut: string): Integer;
+begin
+  Result := RunCaptureEnv(AExe, AArgs, AInput, AOut, []);
+end;
+
 function WhichExe(const AName: string): string;
 begin
   Result := FileSearch(AName, GetEnvironmentVariable('PATH'));
 end;
+
+{$IFDEF LINUX}
+{ The systemd per-user D-Bus session bus (unix:path=/run/user/<uid>/bus), where
+  gnome-keyring / the Secret Service registers. Over x2go/NX (and other
+  non-login sessions) DBUS_SESSION_BUS_ADDRESS points at a private bus with no
+  secret-service, so secret-tool finds nothing there; retrying against this bus
+  reaches the real keyring. Empty if that bus socket doesn't exist. }
+function UserSecretBusEnv: TStringArray;
+var
+  rt: string;
+begin
+  Result := [];
+  rt := '/run/user/' + IntToStr(FpGetuid);
+  if FileExists(rt + '/bus') then
+    Result := ['XDG_RUNTIME_DIR=' + rt,
+               'DBUS_SESSION_BUS_ADDRESS=unix:path=' + rt + '/bus'];
+end;
+
+{ secret-tool, retried on the systemd user bus if the inherited session yields
+  nothing. Returns the exit code; AOut has stdout. }
+function SecretTool(const AArgs: array of string; const AInput: string;
+  out AOut: string): Integer;
+var
+  env: TStringArray;
+begin
+  Result := RunCapture('secret-tool', AArgs, AInput, AOut);
+  // rc 0 = success (a `lookup` that finds nothing exits non-zero), so only retry
+  // on failure -- e.g. the session bus has no secret-service (x2go/NX).
+  if Result = 0 then Exit;
+  env := UserSecretBusEnv;
+  if Length(env) > 0 then
+    Result := RunCaptureEnv('secret-tool', AArgs, AInput, AOut, env);
+end;
+{$ENDIF}
 
 { ---- TCredStore ---- }
 
@@ -144,7 +219,7 @@ begin
   {$IFDEF LINUX}
   if WhichExe('secret-tool') <> '' then
   begin
-    rc := RunCapture('secret-tool',
+    rc := SecretTool(
       ['store', '--label=GotBox', 'service', ServiceName, 'account', AUser],
       AToken, outp);
     Result := rc = 0;
@@ -173,7 +248,7 @@ begin
   {$IFDEF LINUX}
   if WhichExe('secret-tool') <> '' then
   begin
-    rc := RunCapture('secret-tool',
+    rc := SecretTool(
       ['lookup', 'service', ServiceName, 'account', AUser], '', outp);
     if (rc = 0) and (outp <> '') then
     begin
@@ -203,7 +278,7 @@ var
 begin
   {$IFDEF LINUX}
   if WhichExe('secret-tool') <> '' then
-    RunCapture('secret-tool', ['clear', 'service', ServiceName, 'account', AUser], '', outp);
+    SecretTool(['clear', 'service', ServiceName, 'account', AUser], '', outp);
   {$ENDIF}
   {$IFDEF DARWIN}
   if WhichExe('security') <> '' then
