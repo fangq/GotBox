@@ -66,7 +66,9 @@ type
     {$ENDIF}
     {$IFDEF LINUX}
     FScaleTimer: TTimer;                     // polls desktop scale for live HiDPI refresh
+    FIconKickTimer: TTimer;                  // one-shot: repaint the tray icon post-embed
     procedure ScaleTick(Sender: TObject);
+    procedure IconKickTick(Sender: TObject);
     {$ENDIF}
     {$IFDEF UNIX}
     procedure StatusSignalTick(Sender: TObject);
@@ -232,6 +234,15 @@ begin
   FScaleTimer.Interval := 3000;
   FScaleTimer.OnTimer := @ScaleTick;
   FScaleTimer.Enabled := True;
+
+  // The classic XEmbed systray (used over x2go, LAZUSEAPPIND=NO) paints the icon
+  // once when the tray plug embeds; over a remote display that first paint can
+  // come up blank/gray. Force one repaint shortly after startup so the real icon
+  // shows without waiting for the first status change.
+  FIconKickTimer := TTimer.Create(Self);
+  FIconKickTimer.Interval := 2500;
+  FIconKickTimer.OnTimer := @IconKickTick;
+  FIconKickTimer.Enabled := True;
   {$ENDIF}
 
   {$IFDEF UNIX}
@@ -264,6 +275,15 @@ begin
   // RefreshScale recomputes the target DPI and re-scales every form if it moved
   if RefreshScale and Assigned(Log) then
     Log.Info('ui', 'UI rescaled to desktop DPI change');
+end;
+
+procedure TMainForm.IconKickTick(Sender: TObject);
+begin
+  FIconKickTimer.Enabled := False;   // one-shot
+  // re-apply the current-state icon to force the embedded systray to repaint
+  // (see FIconKickTimer setup); harmless on backends that painted correctly.
+  FTrayShown := False;
+  UpdateTrayState;
 end;
 {$ENDIF}
 

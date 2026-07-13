@@ -57,6 +57,16 @@ function HandleOverlayRegistration(out AExitCode: Integer): Boolean;
   the GUI's "Enable Explorer overlays" menu action can call it too. }
 function RunOverlayRegistration(AUnregister: Boolean): Integer;
 
+{ Over an x2go/NX session the StatusNotifier (AppIndicator) tray is unusable --
+  the panel can't render its D-Bus menu or resolve its icon, and it delivers no
+  click events. The classic XEmbed systray works there, and LCL switches to it
+  when LAZUSEAPPIND=NO is in the environment. LCL reads that var once at startup
+  and FPC's RTL environment is a startup snapshot (an in-process setenv is NOT
+  seen), so if we detect an x2go session and the var is unset, re-exec ourselves
+  once with it set. No-op off Unix, off x2go, or if the var is already set (which
+  also prevents a re-exec loop). Call FIRST, before the widgetset comes up. }
+procedure MaybeReExecForX2Go;
+
 { Detach from the controlling terminal and run in the background (Unix/macOS).
   No-op on Windows. MUST be called at program start -- before the widgetset is
   initialized and before any worker threads are created -- because it forks. }
@@ -141,6 +151,43 @@ begin
 end;
 
 {$IFDEF UNIX}
+procedure MaybeReExecForX2Go;
+var
+  selfPath: RawByteString;   // FileGetSymLinkTarget's out-param type
+  args, envs: array of string;
+  argv, envp: array of PChar;
+  i, ac, ec: Integer;
+begin
+  if GetEnvironmentVariable('X2GO_SESSION') = '' then Exit;      // only over x2go
+  if GetEnvironmentVariable('LAZUSEAPPIND') <> '' then Exit;     // set (or re-exec'd)
+
+  if not FileGetSymLinkTarget('/proc/self/exe', selfPath) then
+    selfPath := ParamStr(0);
+  if selfPath = '' then Exit;
+
+  // argv = selfPath + our original arguments + nil terminator
+  ac := ParamCount;
+  SetLength(args, ac + 1);
+  args[0] := selfPath;
+  for i := 1 to ac do args[i] := ParamStr(i);
+  SetLength(argv, ac + 2);
+  for i := 0 to ac do argv[i] := PChar(args[i]);
+  argv[ac + 1] := nil;
+
+  // envp = current environment + LAZUSEAPPIND=NO + nil terminator
+  ec := GetEnvironmentVariableCount;
+  SetLength(envs, ec + 1);
+  for i := 1 to ec do envs[i - 1] := GetEnvironmentString(i);
+  envs[ec] := 'LAZUSEAPPIND=NO';
+  SetLength(envp, ec + 2);
+  for i := 0 to ec do envp[i] := PChar(envs[i]);
+  envp[ec + 1] := nil;
+
+  // replaces this process image; the args/envs strings stay alive until then
+  FpExecve(PChar(selfPath), @argv[0], @envp[0]);
+  // only returns on failure -> carry on with the default tray backend
+end;
+
 procedure Daemonize;
 var
   pid: TPid;
@@ -176,6 +223,11 @@ begin
   end;
 end;
 {$ELSE}
+
+procedure MaybeReExecForX2Go;
+begin
+  // x2go/NX + AppIndicator is a Linux concern only.
+end;
 
 procedure Daemonize;
 begin
