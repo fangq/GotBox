@@ -37,8 +37,8 @@ type
     RemoteUrl: string;   // https remote (without embedded credentials)
     Paused: Boolean;     // user paused syncing for this repo
     AutoSync: Boolean;   // True = auto add/commit/trim like the root; False =
-                         // "managed": transport committed state only, never
-                         // stage/commit/trim (the default -- protects history)
+    // "managed": transport committed state only, never
+    // stage/commit/trim (the default -- protects history)
   end;
   TRepoEntryArray = array of TRepoEntry;
 

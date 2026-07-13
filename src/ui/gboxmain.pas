@@ -50,7 +50,7 @@ type
     FLastAgg: TRepoState;
     FTrayShown: Boolean;   // has the tray icon been set at least once?
     FStatusItem: TMenuItem;   // disabled top menu item mirroring the state (tray
-                              // tooltips are unreliable on Linux SNI/xfce)
+    // tooltips are unreliable on Linux SNI/xfce)
     FIcons: array[TRepoState] of TIcon;
     FBootWatcher: TFileWatcher;
     // qualified: an LCL unit in the uses clause shadows TCriticalSection with
@@ -189,6 +189,7 @@ end;
 procedure RefreshTrayIconTheme;
 begin
 end;
+
 {$ENDIF}
 
 procedure TMainForm.FormCreate(Sender: TObject);
@@ -802,7 +803,8 @@ begin
   end;
   if haveCreds then Exit;
 
-  if Assigned(Log) then Log.Info('ui', 'no GitHub credentials yet; awaiting Account sign-in');
+  if Assigned(Log) then Log.Info('ui',
+      'no GitHub credentials yet; awaiting Account sign-in');
   if Assigned(FStatusItem) then
     FStatusItem.Caption := 'Not signed in - open Account... to connect GitHub';
   TrayIcon.Hint := 'GotBox - not signed in';
@@ -1169,8 +1171,8 @@ begin
     git.Free;
   end;
   for i := 0 to High(tags) do
-    AOut.Add(tags[i].Label_ + '   ·   ' + tags[i].Subject +
-      '   (' + tags[i].Date + ')');
+    AOut.Add(tags[i].Label_ + '   ·   ' + tags[i].Subject + '   (' +
+      tags[i].Date + ')');
 end;
 
 procedure TMainForm.HandleAddTag(const ARepo, ALabel, AMessage: string);
@@ -1201,8 +1203,8 @@ var
   git: TGitRunner;
   token, err, detail: string;
 begin
-  if not MsgConfirm('Squash all commits between tags in "' + ARepo + '"?' +
-    LineEnding + LineEnding +
+  if not MsgConfirm('Squash all commits between tags in "' + ARepo +
+    '"?' + LineEnding + LineEnding +
     'This REWRITES history and force-pushes. Other machines will reset to ' +
     'match on their next sync. Your tagged snapshots and the commits after the ' +
     'newest tag are preserved; the machine-stamped commits between tags are ' +
@@ -1413,9 +1415,8 @@ begin
       'Author: Qianqian Fang <fangqq at gmail.com>' + LineEnding +
       'Project: https://github.com/fangq/GotBox' + LineEnding +
       'Issues: https://github.com/fangq/GotBox/issues' + LineEnding +
-      LineEnding +
-      'License: GNU General Public License, version 3 or later (GPLv3+).' +
-      LineEnding + 'Distributed WITHOUT ANY WARRANTY; see LICENSE.txt.' +
+      LineEnding + 'License: GNU General Public License, version 3 or later (GPLv3+).'
+      + LineEnding + 'Distributed WITHOUT ANY WARRANTY; see LICENSE.txt.' +
       LineEnding + LineEnding +
       'Commercial use: if the GPLv3 conflicts with your use (e.g. embedding ' +
       'in closed-source software), contact the author for a separate ' +

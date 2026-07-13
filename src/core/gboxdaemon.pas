@@ -128,13 +128,11 @@ begin
     '  -d, --daemon   detach from the terminal and run in the background' +
     LineEnding + '  --takeover     take over a root another GotBox instance is managing'
     + LineEnding +
-    '  --status       ask the running GotBox to open its Status window (e.g. when'
-    + LineEnding +
-    '                 the tray menu will not pop, as over x2go/NX)' + LineEnding +
-    '  --register-overlays    install the Explorer icon overlays (Windows; UAC)' +
-    LineEnding +
-    '  --unregister-overlays  remove the Explorer icon overlays (Windows; UAC)' +
-    LineEnding + '  -h, --help     show this help and exit' +
+    '  --status       ask the running GotBox to open its Status window (e.g. when' +
+    LineEnding + '                 the tray menu will not pop, as over x2go/NX)' +
+    LineEnding + '  --register-overlays    install the Explorer icon overlays (Windows; UAC)'
+    + LineEnding + '  --unregister-overlays  remove the Explorer icon overlays (Windows; UAC)'
+    + LineEnding + '  -h, --help     show this help and exit' +
     LineEnding + LineEnding +
     'For a headless host or a plain SSH session (no X display), use the ' +
     'GUI-free' + LineEnding + 'daemon instead:  gotboxd [-d]' + LineEnding;
@@ -181,6 +179,7 @@ procedure Daemonize;
 begin
   // Windows: a GUI-subsystem app launched from a console is already detached.
 end;
+
 {$ENDIF}
 
 {$IFDEF UNIX}
@@ -315,10 +314,12 @@ begin
   end;
 end;
 {$ELSE}
+
 function RunOverlayRegistration(AUnregister: Boolean): Integer;
 begin
   Result := 1;                     // Explorer overlays are Windows-only
 end;
+
 {$ENDIF}
 
 function HandleOverlayRegistration(out AExitCode: Integer): Boolean;

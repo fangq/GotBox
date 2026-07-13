@@ -167,8 +167,8 @@ begin
   EnsureIdentity(AGit);
   commits := TStringList.Create;
   try
-    commits.Text := AGit.GitQuiet(['rev-list', '--first-parent', '--reverse',
-      base + '..HEAD']).StdOut;
+    commits.Text := AGit.GitQuiet(['rev-list', '--first-parent',
+      '--reverse', base + '..HEAD']).StdOut;
     prev := snap;
     for i := 0 to commits.Count - 1 do
     begin
@@ -300,8 +300,8 @@ begin
     ADetail := 'invalid tag name: ' + ALabel;
     Exit;
   end;
-  if AGit.GitQuiet(['rev-parse', '--verify', '--quiet',
-    'refs/tags/' + ALabel]).Ok then
+  if AGit.GitQuiet(['rev-parse', '--verify', '--quiet', 'refs/tags/' +
+    ALabel]).Ok then
   begin
     ADetail := 'a tag named "' + ALabel + '" already exists';
     Exit;
