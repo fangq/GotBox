@@ -92,6 +92,19 @@ var
     end;
   end;
 
+  procedure WriteData(const ADir, AText: string);
+  var
+    f: TStringList;
+  begin
+    f := TStringList.Create;
+    try
+      f.Text := AText;
+      f.SaveToFile(IncludeTrailingPathDelimiter(ADir) + 'data.txt');
+    finally
+      f.Free;
+    end;
+  end;
+
 var
   base, bareRepo, aDir, bDir, detail: string;
   git: TGitRunner;
@@ -99,6 +112,7 @@ var
   outcome: TSyncOutcome;
   i: Integer;
   f: TStringList;
+  mBare, mDir: string;
 begin
   Randomize;
   base := IncludeTrailingPathDelimiter(GetTempDir) + 'gotbox-hist-' +
@@ -193,6 +207,55 @@ begin
     'B still has latest content after reset');
 
   conflicts.Free;
+
+  // --- regression: a MERGE commit inside the trim window ---------------------
+  // GotBox creates merge commits during conflict handling. The old rebase-based
+  // trim flattened them and hit unresolvable conflicts (looping forever); the
+  // tree-copy rebuild must sail through and keep the exact merged content.
+  mBare := IncludeTrailingPathDelimiter(base) + 'mremote.git';
+  mDir := IncludeTrailingPathDelimiter(base) + 'M';
+  ForceDirectories(mBare);
+  with TGitRunner.Create(mBare) do
+    try Git(['init', '--bare', '-b', 'main']); finally Free; end;
+  with TGitRunner.Create('') do
+    try Clone(mBare, mDir); finally Free; end;
+  SetIdentity(mDir, 'mia');
+
+  git := TGitRunner.Create(mDir);
+  try
+    WriteData(mDir, 'c1');
+    git.AddAll; git.CommitAll('c1');
+    git.Git(['push', 'origin', 'main']);           // establish origin/main
+    WriteData(mDir, 'base-content');
+    git.AddAll; git.CommitAll('c2');
+    // diverge: feature edits data.txt, main edits it differently -> merge conflict
+    git.Git(['checkout', '-b', 'feature']);
+    WriteData(mDir, 'feature-side');
+    git.AddAll; git.CommitAll('feature edit');
+    git.Git(['checkout', 'main']);
+    WriteData(mDir, 'main-side');
+    git.AddAll; git.CommitAll('main edit');
+    git.Git(['merge', 'feature']);                  // conflicts (expected)
+    WriteData(mDir, 'merged-result');               // resolve
+    git.AddAll;
+    git.Git(['commit', '--no-edit']);               // the merge commit
+    WriteData(mDir, 'after-merge-1');
+    git.AddAll; git.CommitAll('c5');
+    WriteData(mDir, 'after-merge-2');
+    git.AddAll; git.CommitAll('c6');
+    git.Git(['push', 'origin', 'main']);            // remote level with HEAD
+
+    // the trim window (last CAP=5) now spans the merge commit
+    Check(TrimHistory(git, CAP, detail), 'TrimHistory over a merge commit (' +
+      detail + ')');
+    Check(CommitCount(mDir, 'HEAD') = CAP + 1,
+      'merged history trimmed to CAP+1 commits');
+    Check(Pos('after-merge-2', HeadContent(mDir)) > 0,
+      'latest content preserved across merge-window trim');
+  finally
+    git.Free;
+  end;
+
   WriteLn;
   if failures = 0 then WriteLn('ALL TESTS PASSED')
   else

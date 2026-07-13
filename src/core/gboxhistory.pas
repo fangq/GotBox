@@ -73,6 +73,10 @@ implementation
 uses
   gboxlog;
 
+{ Give commit-tree/rebase/tag a committer identity when the repo has none;
+  defined below, used by TrimHistory (forward-declared here). }
+procedure EnsureIdentity(AGit: TGitRunner); forward;
+
 function HasUserTags(AGit: TGitRunner): Boolean;
 begin
   Result := Trim(AGit.GitQuiet(['tag', '-l']).StdOut) <> '';
@@ -94,9 +98,10 @@ end;
 
 function TrimHistory(AGit: TGitRunner; ACap: Integer; out ADetail: string): Boolean;
 var
-  n: Integer;
-  base, tree, snap, ts: string;
+  n, i: Integer;
+  base, tree, snap, ts, msg, prev, ci: string;
   r: TGitResult;
+  commits: TStringList;
 begin
   Result := False;
   ADetail := '';
@@ -117,6 +122,15 @@ begin
       ADetail := 'remote has unmerged commits; deferring trim';
       Exit;
     end;
+
+  // never rewrite over a dirty tree: the final `reset --hard` would discard
+  // uncommitted edits. The sync cycle commits before trimming, so this is just a
+  // guard against an edit landing mid-cycle -- defer to the next cycle if so.
+  if Trim(AGit.GitQuiet(['status', '--porcelain']).StdOut) <> '' then
+  begin
+    ADetail := 'working tree not clean; deferring trim';
+    Exit;
+  end;
 
   // boundary commit: the one just before the window of the last ACap commits
   base := Trim(AGit.RevParse('HEAD~' + IntToStr(ACap)).StdOut);
@@ -143,12 +157,49 @@ begin
     Exit;
   end;
 
-  // replay the most recent ACap commits onto the snapshot
-  r := AGit.Git(['rebase', '--onto', snap, base]);
+  // Rebuild the recent window onto the snapshot by copying each commit's TREE
+  // wholesale (via commit-tree), walking first-parent -- NOT `git rebase`, which
+  // diff-replays and explodes into unresolvable conflicts on the merge commits
+  // GotBox creates during conflict handling (a "keep 30" range can flatten to 49+
+  // commits and stall forever). Taking each commit's exact tree means the working
+  // tree stays byte-identical and no merge/conflict is ever possible; the
+  // first-parent tree already folds in whatever a merge brought from the remote.
+  EnsureIdentity(AGit);
+  commits := TStringList.Create;
+  try
+    commits.Text := AGit.GitQuiet(['rev-list', '--first-parent', '--reverse',
+      base + '..HEAD']).StdOut;
+    prev := snap;
+    for i := 0 to commits.Count - 1 do
+    begin
+      if Trim(commits[i]) = '' then Continue;
+      tree := Trim(AGit.Git(['rev-parse', Trim(commits[i]) + '^{tree}']).StdOut);
+      if tree = '' then
+      begin
+        ADetail := 'could not resolve tree for ' + Trim(commits[i]);
+        Exit;
+      end;
+      msg := AGit.GitQuiet(['log', '-1', '--format=%s', Trim(commits[i])]).StdOut;
+      while (msg <> '') and (msg[Length(msg)] in [#10, #13]) do
+        SetLength(msg, Length(msg) - 1);
+      if msg = '' then msg := 'GotBox commit';
+      ci := Trim(AGit.Git(['commit-tree', tree, '-p', prev, '-m', msg]).StdOut);
+      if ci = '' then
+      begin
+        ADetail := 'commit-tree failed rebuilding ' + Trim(commits[i]);
+        Exit;
+      end;
+      prev := ci;
+    end;
+  finally
+    commits.Free;
+  end;
+
+  // move the branch to the rebuilt tip (tree == old HEAD tree, so no file change)
+  r := AGit.Git(['reset', '--hard', prev]);
   if not r.Ok then
   begin
-    AGit.Git(['rebase', '--abort']);
-    ADetail := 'rebase failed: ' + Trim(r.StdErr);
+    ADetail := 'reset to rebuilt history failed: ' + Trim(r.StdErr);
     Exit;
   end;
 
