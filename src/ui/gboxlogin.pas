@@ -58,11 +58,59 @@ implementation
 
 {$R *.lfm}
 
-procedure TLoginForm.btnValidateClick(Sender: TObject);
+type
+  { Runs the blocking GitHub token validation + keyring store off the GUI thread,
+    so the dialog stays responsive (the HTTPS round-trip can take many seconds,
+    especially over a remote link like x2go). The caller pumps the message loop
+    while this runs, then reads the results. }
+  TValidateThread = class(TThread)
+  private
+    FToken: string;
+    FLogin, FErr: string;
+    FValidated, FSaved: Boolean;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const AToken: string);
+    property Login: string read FLogin;
+    property Err: string read FErr;
+    property Validated: Boolean read FValidated;
+    property Saved: Boolean read FSaved;
+  end;
+
+constructor TValidateThread.Create(const AToken: string);
+begin
+  FToken := AToken;
+  FreeOnTerminate := False;   // caller reads results then frees us
+  inherited Create(False);    // run now
+end;
+
+procedure TValidateThread.Execute;
 var
   api: TGitHubApi;
   cred: TCredStore;
+begin
+  api := TGitHubApi.Create(FToken);
+  try
+    FValidated := api.ValidateToken(FLogin, FErr);
+  finally
+    api.Free;
+  end;
+  if not FValidated then Exit;
+  // Persist the token in the OS credential store keyed by the canonical login.
+  cred := TCredStore.Create;
+  try
+    FSaved := cred.SaveToken(FLogin, FToken);
+  finally
+    cred.Free;
+  end;
+end;
+
+procedure TLoginForm.btnValidateClick(Sender: TObject);
+var
+  th: TValidateThread;
   login, err: string;
+  okValidated, okSaved: Boolean;
 begin
   if Trim(ePat.Text) = '' then
   begin
@@ -70,37 +118,41 @@ begin
     Exit;
   end;
 
-  // Validate the token against GitHub (blocking, but a one-off action).
+  // Validate against GitHub (blocking HTTPS) + save to the keyring on a worker
+  // thread; pump events here so the window doesn't freeze / show "not responding".
   Screen.Cursor := crHourGlass;
   btnValidate.Enabled := False;
+  btnCancel.Enabled := False;
+  th := TValidateThread.Create(Trim(ePat.Text));
   try
-    api := TGitHubApi.Create(Trim(ePat.Text));
-    try
-      if not api.ValidateToken(login, err) then
-      begin
-        MsgError('Could not validate token:' + LineEnding + err);
-        Exit;
-      end;
-    finally
-      api.Free;
+    while not th.Finished do
+    begin
+      Application.ProcessMessages;
+      CheckSynchronize(50);   // also runs any queued Synchronize calls
     end;
+    th.WaitFor;
+    okValidated := th.Validated;
+    okSaved := th.Saved;
+    login := th.Login;
+    err := th.Err;
   finally
+    th.Free;
     btnValidate.Enabled := True;
+    btnCancel.Enabled := True;
     Screen.Cursor := crDefault;
+  end;
+
+  if not okValidated then
+  begin
+    MsgError('Could not validate token:' + LineEnding + err);
+    Exit;
   end;
 
   // GitHub tells us the canonical login name; trust it over the typed value.
   eUser.Text := login;
   FToken := Trim(ePat.Text);
-
-  // Persist the token in the OS credential store keyed by login.
-  cred := TCredStore.Create;
-  try
-    if not cred.SaveToken(login, FToken) then
-      MsgError('Token validated but could not be saved to the credential store.');
-  finally
-    cred.Free;
-  end;
+  if not okSaved then
+    MsgError('Token validated but could not be saved to the credential store.');
 
   if Assigned(Log) then Log.Info('login', 'token validated for ' + login);
   ModalResult := mrOK;
