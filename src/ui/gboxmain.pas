@@ -60,9 +60,15 @@ type
     FLockTimer: TTimer;                      // root-lock heartbeat + takeover watchdog
     FPendingToken: string;
     // token handed to DoCreateEngine (main thread)
+    {$IFDEF UNIX}
+    FStatusSignalTimer: TTimer;              // polls the SIGUSR1 flag (--status)
+    {$ENDIF}
     {$IFDEF LINUX}
     FScaleTimer: TTimer;                     // polls desktop scale for live HiDPI refresh
     procedure ScaleTick(Sender: TObject);
+    {$ENDIF}
+    {$IFDEF UNIX}
+    procedure StatusSignalTick(Sender: TObject);
     {$ENDIF}
     procedure LockTick(Sender: TObject);
     procedure TryBootstrap;
@@ -123,7 +129,21 @@ implementation
 {$R *.lfm}
 
 uses
+  {$IFDEF UNIX}BaseUnix, ctypes,{$ENDIF}
   gboxconfig, gboxlogin, gboxstatus, gboxlinksub;
+
+{$IFDEF UNIX}
+var
+  { Set by the SIGUSR1 handler (async-signal context: only touch this flag).
+    A GUI timer polls it and opens the Status window -- used by `gotbox --status`
+    when the tray menu can't be popped (e.g. over x2go/NX). }
+  GShowStatusRequested: Boolean = False;
+
+procedure HandleSigUsr1(sig: cint); cdecl;
+begin
+  GShowStatusRequested := True;
+end;
+{$ENDIF}
 
 type
   { One-shot worker that runs the heavy startup bring-up off the GUI thread. }
@@ -213,6 +233,17 @@ begin
   FScaleTimer.Enabled := True;
   {$ENDIF}
 
+  {$IFDEF UNIX}
+  // `gotbox --status` sends us SIGUSR1 to open the Status window (for when the
+  // tray menu won't pop, e.g. over x2go/NX). The handler just flips a flag;
+  // this timer picks it up on the GUI thread and opens the window safely.
+  FpSignal(SIGUSR1, @HandleSigUsr1);
+  FStatusSignalTimer := TTimer.Create(Self);
+  FStatusSignalTimer.Interval := 200;
+  FStatusSignalTimer.OnTimer := @StatusSignalTick;
+  FStatusSignalTimer.Enabled := True;
+  {$ENDIF}
+
   // Root-lock heartbeat + takeover watchdog (enabled once the engine starts, or
   // while standing by for another machine to release the folder).
   FLockTimer := TTimer.Create(Self);
@@ -232,6 +263,16 @@ begin
   // RefreshScale recomputes the target DPI and re-scales every form if it moved
   if RefreshScale and Assigned(Log) then
     Log.Info('ui', 'UI rescaled to desktop DPI change');
+end;
+{$ENDIF}
+
+{$IFDEF UNIX}
+procedure TMainForm.StatusSignalTick(Sender: TObject);
+begin
+  if not GShowStatusRequested then Exit;
+  GShowStatusRequested := False;
+  if Assigned(Log) then Log.Info('ui', 'SIGUSR1 -> opening Status window');
+  mnuStatus(nil);
 end;
 {$ENDIF}
 

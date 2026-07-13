@@ -46,6 +46,20 @@ begin
     writeln(UsageText);
     Halt(0);
   end;
+  // --status: ask the already-running GotBox to open its Status window (for
+  // when the tray menu can't be popped, e.g. over x2go/NX). Never starts the app.
+  if WantShowStatus then
+  begin
+    {$IFDEF UNIX}
+    if SendShowStatus then
+      WriteLn('Asked the running GotBox to open its Status window.')
+    else
+      WriteLn('GotBox does not appear to be running.');
+    {$ELSE}
+    WriteLn('--status is only supported on Unix.');
+    {$ENDIF}
+    Halt(0);
+  end;
   // Explorer icon-overlay (un)registration: self-elevates and exits, never
   // starting the tray app. No-op unless --(un)register-overlays was passed.
   if HandleOverlayRegistration(ovlExit) then

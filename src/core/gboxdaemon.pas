@@ -36,6 +36,12 @@ function WantDaemon: Boolean;
 function WantHelp: Boolean;
 { True if --takeover was passed (take over a root another instance manages). }
 function WantTakeover: Boolean;
+{ True if --status was passed (ask a running instance to open its Status window). }
+function WantShowStatus: Boolean;
+{ Signal the already-running GotBox to open its Status window (SIGUSR1 to the pid
+  recorded in the lock/pid file). Returns False if no live GotBox is running.
+  Useful when the tray menu can't be popped (e.g. over x2go/NX). Unix only. }
+function SendShowStatus: Boolean;
 { Help/usage text for --help. }
 function UsageText: string;
 
@@ -98,6 +104,11 @@ begin
   Result := HasArg('--takeover', '--takeover');
 end;
 
+function WantShowStatus: Boolean;
+begin
+  Result := HasArg('--status', '--status');
+end;
+
 function WantRegisterOverlays: Boolean;
 begin
   Result := HasArg('--register-overlays', '--register-overlays');
@@ -117,6 +128,9 @@ begin
     '  -d, --daemon   detach from the terminal and run in the background' +
     LineEnding + '  --takeover     take over a root another GotBox instance is managing'
     + LineEnding +
+    '  --status       ask the running GotBox to open its Status window (e.g. when'
+    + LineEnding +
+    '                 the tray menu will not pop, as over x2go/NX)' + LineEnding +
     '  --register-overlays    install the Explorer icon overlays (Windows; UAC)' +
     LineEnding +
     '  --unregister-overlays  remove the Explorer icon overlays (Windows; UAC)' +
@@ -221,6 +235,33 @@ begin
   finally
     sl.Free;
   end;
+end;
+
+function SendShowStatus: Boolean;
+var
+  pidfile: string;
+  pid: LongInt;
+  sl: TStringList;
+begin
+  Result := False;
+  pidfile := IncludeTrailingPathDelimiter(GotConfigDir) + 'gotbox.pid';
+  if not FileExists(pidfile) then Exit;
+  sl := TStringList.Create;
+  try
+    sl.LoadFromFile(pidfile);
+    pid := StrToIntDef(Trim(sl.Text), 0);
+  finally
+    sl.Free;
+  end;
+  if (pid > 0) and (FpKill(pid, 0) = 0) and ProcIsGotbox(pid) then
+    Result := FpKill(pid, SIGUSR1) = 0;   // the GUI handles SIGUSR1 -> show Status
+end;
+{$ENDIF}
+
+{$IFDEF WINDOWS}
+function SendShowStatus: Boolean;
+begin
+  Result := False;   // signal-based; not implemented on Windows
 end;
 {$ENDIF}
 

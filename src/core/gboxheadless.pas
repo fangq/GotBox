@@ -166,6 +166,10 @@ begin
     {$IFDEF UNIX}
     FpSignal(SIGTERM, @HandleStop);
     FpSignal(SIGINT, @HandleStop);
+    // `gotbox --status` sends SIGUSR1 to open the GUI's Status window; a headless
+    // daemon has no window, so ignore it rather than let the default action
+    // (terminate) kill the sync.
+    FpSignal(SIGUSR1, SignalHandler(SIG_IGN));
     {$ENDIF}
     // CheckSynchronize (not plain Sleep) pumps the engine's submodule reconcile,
     // which it marshals via TThread.Queue (the GUI build gets this from
