@@ -204,9 +204,12 @@ var
 
 begin
   SetLength(Result, 0);
+  // %09 (git expands it to a TAB in the OUTPUT) -- NOT a literal #9 in the arg:
+  // FPC's TProcess doesn't quote a tab, so a literal tab would be split into
+  // separate args by the Windows command-line parser and break the format.
   r := AGit.GitQuiet(['tag', '-l', '--sort=-creatordate',
-    '--format=%(refname:short)' + #9 + '%(creatordate:short)' + #9 +
-    '%(objectname:short)' + #9 + '%(contents:subject)']);
+    '--format=%(refname:short)%09%(creatordate:short)%09' +
+    '%(objectname:short)%09%(contents:subject)']);
   if not r.Ok then Exit;
   sl := TStringList.Create;
   try

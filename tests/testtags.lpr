@@ -31,6 +31,7 @@ uses
 
 var
   failures: Integer = 0;
+  failedNames: string = '';
 
   procedure Check(ACond: Boolean; const AName: string);
   begin
@@ -39,6 +40,7 @@ var
     begin
       WriteLn('  FAIL - ', AName);
       Inc(failures);
+      failedNames := failedNames + '    - ' + AName + LineEnding;
     end;
   end;
 
@@ -158,6 +160,9 @@ begin
   WriteLn;
   if failures = 0 then WriteLn('ALL TESTS PASSED')
   else
-    WriteLn(failures, ' TEST(S) FAILED');
+  begin
+    WriteLn(failures, ' TEST(S) FAILED:');
+    Write(failedNames);   // named, so a truncated CI tail still shows which
+  end;
   Halt(failures);
 end.
