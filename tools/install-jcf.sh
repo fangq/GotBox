@@ -31,7 +31,10 @@ cp -r "$JCF2" "$WORK/jcf2"
 echo "Building JCF from $JCF2 ..."
 ( cd "$WORK/jcf2/CommandLine/Lazarus" && "$LAZBUILD" jcf.lpi )
 
-BIN="$(find "$WORK/jcf2" -type f -name jcf | head -n1)"
+# the built binary is named "jcf" on Linux/macOS but "JCF" (from JCF.lpi's
+# target) on case-sensitive filesystems / some Lazarus versions -- match both.
+BIN="$(find "$WORK/jcf2" -type f \( -name jcf -o -name JCF -o -name jcf.exe \) \
+  -perm -u+x | head -n1)"
 [ -n "$BIN" ] || { echo "build produced no jcf binary" >&2; exit 1; }
 
 mkdir -p "$DEST"
