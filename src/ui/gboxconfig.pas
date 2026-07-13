@@ -53,7 +53,6 @@ type
     btnCancel: TButton;
     procedure btnBrowseClick(Sender: TObject);
     procedure btnOKClick(Sender: TObject);
-
   public
     function Edit(ACfg: TGotConfig): Boolean;
   end;

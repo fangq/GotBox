@@ -489,8 +489,7 @@ begin
   inherited Create;
   FCache := ACache;
   if AEndpoint <> '' then FEndpoint := AEndpoint
-  else
-    FEndpoint := DefaultOverlayEndpoint;
+  else FEndpoint := DefaultOverlayEndpoint;
 end;
 
 destructor TOverlayServer.Destroy;

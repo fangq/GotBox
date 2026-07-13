@@ -87,10 +87,10 @@ begin
     if not MsgConfirm(
       'Automatic sync will auto-commit and push EVERY change in this folder as ' +
       'machine-stamped commits, stage any new/untracked files, and periodically ' +
-      'squash (rewrite) its history to keep it small.' + LineEnding +
-      LineEnding + 'This can contaminate or truncate a real project''s git history. Use '
-      + 'Managed mode unless this folder is just a data drop.' +
-      LineEnding + LineEnding + 'Enable automatic sync anyway?') then
+      'squash (rewrite) its history to keep it small.' + LineEnding + LineEnding +
+      'This can contaminate or truncate a real project''s git history. Use ' +
+      'Managed mode unless this folder is just a data drop.' + LineEnding + LineEnding +
+      'Enable automatic sync anyway?') then
       chkAutoSync.Checked := False;   // reverted -> stays managed
 end;
 

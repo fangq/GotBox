@@ -60,8 +60,7 @@ type
     FAuthUser: string;
     FAuthToken: string;
     FQuiet: Boolean;   // suppress warn-logging for expected-to-fail probes
-    FDefaultTimeoutMs: Integer;
-    // applied to ops that don't pass their own (0 = untimed)
+    FDefaultTimeoutMs: Integer;   // applied to ops that don't pass their own (0 = untimed)
     function Run(const AArgs: array of string; ATimeoutMs: Integer = 0): TGitResult;
     function EnsureAskPass: string;
   public
@@ -233,8 +232,7 @@ function GitTraceOn: Boolean;
 begin
   if gGitTrace < 0 then
     if GetEnvironmentVariable('GOTBOX_GIT_TRACE') <> '' then gGitTrace := 1
-    else
-      gGitTrace := 0;
+    else gGitTrace := 0;
   Result := gGitTrace = 1;
 end;
 
@@ -352,8 +350,8 @@ begin
       Log.Warn('git', Format('exit %d: %s', [Result.ExitCode, Trim(Result.StdErr)]));
     if GitTraceOn then
     begin
-      trace := Format('GIT< [t%u] exit=%d %dms%s %s',
-        [PtrUInt(GetThreadID), Result.ExitCode, MilliSecondsBetween(Now, started),
+      trace := Format('GIT< [t%u] exit=%d %dms%s %s', [PtrUInt(GetThreadID),
+        Result.ExitCode, MilliSecondsBetween(Now, started),
         BoolToStr(timedOut, ' TIMEOUT', ''), cmdline]);
       WriteLn(StdErr, trace);
       Flush(StdErr);
@@ -421,8 +419,8 @@ begin
   // (ignore=all), and a broken/inaccessible submodule must not fail the root's
   // fetch (git's default on-demand recursion would abort the whole fetch).
   // --tags so user checkpoint tags created on another machine arrive here.
-  Result := Run(['fetch', '--prune', '--tags', '--no-recurse-submodules', 'origin'],
-    GIT_NET_TIMEOUT_MS);
+  Result := Run(['fetch', '--prune', '--tags', '--no-recurse-submodules',
+    'origin'], GIT_NET_TIMEOUT_MS);
 end;
 
 function TGitRunner.PullRebase: TGitResult;

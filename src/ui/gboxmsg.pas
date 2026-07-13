@@ -128,7 +128,6 @@ end;
 begin
   Result := 0;
 end;
-
 {$ENDIF}
 
 var

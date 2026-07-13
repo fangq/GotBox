@@ -68,7 +68,8 @@ type
   environment with those names overridden/added; otherwise it inherits ours.
   Returns exit code; AOut receives stdout. }
 function RunCaptureEnv(const AExe: string; const AArgs: array of string;
-  const AInput: string; out AOut: string; const AEnvOverride: array of string): Integer;
+  const AInput: string; out AOut: string;
+  const AEnvOverride: array of string): Integer;
 var
   proc: TProcess;
   outStream: TStringStream;

@@ -291,7 +291,7 @@ var
   hadStash: Boolean;
   fetchErr: string;
 
-  // append name-only output of a git command to AChanged (deduplicated)
+// append name-only output of a git command to AChanged (deduplicated)
   procedure Collect(const AArgs: array of string);
   var
     rr: TGitResult;
