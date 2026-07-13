@@ -875,13 +875,16 @@ begin
   end;
 end;
 
-{ Left-click opens the Status window (which doubles as a control centre). This
-  is the reliable entry point where the tray context menu can't pop -- notably
-  over x2go/NX, whose panels won't render a StatusNotifier dbusmenu. Right-click
-  still shows the menu on desktops that support it. }
+{ Left-click pops the context menu at the cursor. We PopUp the TPopupMenu
+  ourselves rather than relying on the tray backend: over x2go/NX the panel
+  won't render a StatusNotifier dbusmenu, but a plain LCL TPopupMenu.PopUp is an
+  ordinary override-redirect GTK menu window, which those panels do show. On
+  desktops that pop the menu on right-click, this just adds it to left-click too.
+  Double-click opens the Status window (also the control centre for x2go). }
 procedure TMainForm.TrayIconClick(Sender: TObject);
 begin
-  mnuStatus(Sender);
+  if Assigned(TrayMenu) then
+    TrayMenu.PopUp;   // at the current mouse position (over the tray icon)
 end;
 
 procedure TMainForm.TrayIconDblClick(Sender: TObject);
