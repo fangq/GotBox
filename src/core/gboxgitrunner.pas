@@ -241,11 +241,33 @@ var
   proc: TProcess;
   outStream, errStream: TStringStream;
   buf: array[0..4095] of Byte;
-  n: LongInt;
-  i: Integer;
+  i, idle: Integer;
   cmdline, trace: string;
   started: TDateTime;
   timedOut: Boolean;
+
+  { Read whatever is currently available on both pipes; return bytes read. }
+  function DrainAvail: LongInt;
+  var
+    m: LongInt;
+  begin
+    Result := 0;
+    m := proc.Output.NumBytesAvailable;
+    if m > 0 then
+    begin
+      if m > SizeOf(buf) then m := SizeOf(buf);
+      m := proc.Output.Read(buf, m);
+      if m > 0 then begin outStream.Write(buf, m); Inc(Result, m); end;
+    end;
+    m := proc.Stderr.NumBytesAvailable;
+    if m > 0 then
+    begin
+      if m > SizeOf(buf) then m := SizeOf(buf);
+      m := proc.Stderr.Read(buf, m);
+      if m > 0 then begin errStream.Write(buf, m); Inc(Result, m); end;
+    end;
+  end;
+
 begin
   Result.ExitCode := -1;
   Result.StdOut := '';
@@ -302,34 +324,29 @@ begin
       WriteLn(StdErr, trace);
       Flush(StdErr);
     end;
-    // drain both pipes until the process exits and no bytes remain
+    // Pump both pipes while the process runs, then drain to EOF. On Windows,
+    // NumBytesAvailable can briefly report 0 while the child's final write is
+    // still landing in the pipe buffer, so once the process has exited we keep
+    // polling until several consecutive reads come back empty -- otherwise the
+    // last -z record (e.g. a trailing "?? file\0") is occasionally truncated,
+    // which surfaced as a flaky "untracked file -> none" overlay result.
+    idle := 0;
     repeat
-      n := proc.Output.NumBytesAvailable;
-      if n > 0 then
-      begin
-        if n > SizeOf(buf) then n := SizeOf(buf);
-        n := proc.Output.Read(buf, n);
-        if n > 0 then outStream.Write(buf, n);
-      end;
-      n := proc.Stderr.NumBytesAvailable;
-      if n > 0 then
-      begin
-        if n > SizeOf(buf) then n := SizeOf(buf);
-        n := proc.Stderr.Read(buf, n);
-        if n > 0 then errStream.Write(buf, n);
-      end;
-      if (not proc.Running) and (proc.Output.NumBytesAvailable = 0) and
-        (proc.Stderr.NumBytesAvailable = 0) then
-        Break;
+      if DrainAvail > 0 then
+        idle := 0
+      else if not proc.Running then
+        Inc(idle);              // exited + nothing read: count quiet polls
+      if idle >= 4 then Break;   // ~4ms of quiet after exit: pipes are drained
+
       // abort a stalled network op rather than block the worker forever
-      if (ATimeoutMs > 0) and proc.Running and
+      if proc.Running and (ATimeoutMs > 0) and
         (MilliSecondsBetween(Now, started) >= ATimeoutMs) then
       begin
         timedOut := True;
         proc.Terminate(124);   // SIGTERM-equivalent; conventional "timed out" code
         Break;
       end;
-      Sleep(5);
+      if proc.Running then Sleep(5) else Sleep(1);
     until False;
 
     if timedOut then
