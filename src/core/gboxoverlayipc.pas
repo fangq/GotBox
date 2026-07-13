@@ -259,36 +259,58 @@ var
   h: THandle;
   mode, nWritten, nRead: DWORD;
   b: Byte;
-  deadline: QWord;
+  overall, rdDeadline: QWord;
   ok: BOOL;
+  gotByte: Boolean;
 begin
   Result := fsNone;
   ep := AEndpoint;
   if ep = '' then ep := DefaultOverlayEndpoint;
   if ATimeoutMs < 1 then ATimeoutMs := 1;
+  overall := GetTickCount64 + QWord(ATimeoutMs);
   try
-    if not WaitNamedPipe(PChar(ep), ATimeoutMs) then Exit;   // no server
-    h := CreateFile(PChar(ep), GENERIC_READ or GENERIC_WRITE, 0, nil,
-      OPEN_EXISTING, 0, 0);
-    if h = INVALID_HANDLE_VALUE then Exit;
-    try
-      mode := PIPE_READMODE_BYTE or PIPE_NOWAIT;
-      SetNamedPipeHandleState(h, @mode, nil, nil);
-      req := APath + #10;
-      nWritten := 0;
-      if not WriteFile(h, PChar(req)^, Length(req), nWritten, nil) then Exit;
-      deadline := GetTickCount64 + QWord(ATimeoutMs);
-      while GetTickCount64 < deadline do
+    // Retry the whole connect+query until we actually read a reply byte or the
+    // budget runs out. The server hosts ONE pipe instance at a time and recreates
+    // it between clients, so a query can briefly find no listening instance (or a
+    // just-closed one) and fail to connect. Retrying rides over that gap. A real
+    // reply -- INCLUDING byte 0 (none) -- returns immediately; only a transport
+    // failure (no byte) is retried, so legitimate "none" answers stay fast.
+    repeat
+      gotByte := False;
+      if WaitNamedPipe(PChar(ep), 50) then
       begin
-        nRead := 0;
-        ok := ReadFile(h, b, 1, nRead, nil);
-        if ok and (nRead = 1) then Exit(ByteToState(b));
-        if (not ok) and (GetLastError <> ERROR_NO_DATA) then Break;
-        Sleep(5);
+        h := CreateFile(PChar(ep), GENERIC_READ or GENERIC_WRITE, 0, nil,
+          OPEN_EXISTING, 0, 0);
+        if h <> INVALID_HANDLE_VALUE then
+          try
+            mode := PIPE_READMODE_BYTE or PIPE_NOWAIT;
+            SetNamedPipeHandleState(h, @mode, nil, nil);
+            req := APath + #10;
+            nWritten := 0;
+            if WriteFile(h, PChar(req)^, Length(req), nWritten, nil) then
+            begin
+              rdDeadline := GetTickCount64 + 500;
+              while (GetTickCount64 < rdDeadline) and (GetTickCount64 < overall) do
+              begin
+                nRead := 0;
+                ok := ReadFile(h, b, 1, nRead, nil);
+                if ok and (nRead = 1) then
+                begin
+                  Result := ByteToState(b);
+                  gotByte := True;
+                  Break;
+                end;
+                if (not ok) and (GetLastError <> ERROR_NO_DATA) then Break;
+                Sleep(5);
+              end;
+            end;
+          finally
+            CloseHandle(h);
+          end;
       end;
-    finally
-      CloseHandle(h);
-    end;
+      if gotByte then Exit;
+      Sleep(5);
+    until GetTickCount64 >= overall;
   except
     Result := fsNone;   // fail-safe: never propagate into the file manager
   end;
