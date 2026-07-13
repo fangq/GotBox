@@ -774,7 +774,13 @@ begin
 end;
 
 { At startup, if the GitHub backend is selected but the username or token is
-  missing, show the login dialog. The ssh backend uses keys, so nothing to ask. }
+  missing, guide the user to sign in -- WITHOUT popping a modal dialog. A modal
+  here grabs input for the whole app, so the tray menu comes up empty until it
+  closes (and over x2go the modal is often not even visible/focused, leaving the
+  user staring at an empty menu). Instead we leave the tray fully usable and
+  surface "sign in via Account..." in the status line + a notification; the user
+  opens the Account window themselves, which then bootstraps the engine. The ssh
+  backend uses keys, so there is nothing to ask. }
 procedure TMainForm.MaybePromptLogin;
 var
   cred: TCredStore;
@@ -795,12 +801,12 @@ begin
   end;
   if haveCreds then Exit;
 
-  if LoginForm.RunLogin(FConfig) then
-  begin
-    FStore.Save(FConfig);
-    if Assigned(Log) then
-      Log.Info('ui', 'account set at startup for ' + FConfig.GithubUser);
-  end;
+  if Assigned(Log) then Log.Info('ui', 'no GitHub credentials yet; awaiting Account sign-in');
+  if Assigned(FStatusItem) then
+    FStatusItem.Caption := 'Not signed in - open Account... to connect GitHub';
+  TrayIcon.Hint := 'GotBox - not signed in';
+  Notify('GotBox - sign in',
+    'Open the tray menu and choose "Account..." to connect your GitHub account.');
 end;
 
 { Event-driven bootstrap: if the backend is configured and the .gotbox root
@@ -1226,6 +1232,10 @@ begin
   begin
     FStore.Save(FConfig);
     Log.Info('ui', 'Account updated for user ' + FConfig.GithubUser);
+    // clear the "Not signed in" hint set by MaybePromptLogin; the engine's first
+    // status change will overwrite it, but reset here in case it settles unchanged
+    if Assigned(FStatusItem) then FStatusItem.Caption := 'Status: starting...';
+    TrayIcon.Hint := 'GotBox';
     // backend just became ready: content already in the root can now bootstrap
     TryBootstrap;
   end;
