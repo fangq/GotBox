@@ -2,10 +2,10 @@
 Type=Application
 Name=GotBox
 GenericName=File Sync
-Comment=Dropbox-like file sync over GitHub private repos
+Comment=Cross-machine file sync over GitHub private repos
 Exec=env LAZUSEAPPIND=NO gotbox
 Icon=gotbox
 Terminal=false
 Categories=Utility;Network;FileTransfer;
-Keywords=sync;git;github;backup;dropbox;
+Keywords=sync;git;github;backup;
 StartupWMClass=gotbox

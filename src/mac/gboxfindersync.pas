@@ -1,5 +1,5 @@
 {
-  GotBox -- Dropbox-like file sync over your own private git repositories.
+  GotBox -- Cross-machine file sync over your own private git repositories.
   Copyright (C) 2026 Qianqian Fang <fangqq at gmail.com>.
 
   This program is free software: you can redistribute it and/or modify it under
@@ -17,7 +17,7 @@
 
 unit gboxfindersync;
 
-{ macOS Finder Sync extension (the Dropbox/TortoiseGit-style status badges).
+{ macOS Finder Sync extension (file-manager status badges).
   This is the principal class of GotBoxFinder.appex, which Finder loads in its
   own process. It watches the GotBox root and, for each file/folder Finder asks
   about, queries the running GotBox process over the existing local socket

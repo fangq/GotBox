@@ -7,7 +7,7 @@
 [![CI](https://github.com/fangq/GotBox/actions/workflows/ci.yml/badge.svg)](https://github.com/fangq/GotBox/actions/workflows/ci.yml)
 [![License: GPL v3+](https://img.shields.io/badge/License-GPLv3--or--later-blue.svg)](LICENSE.txt)
 
-**Dropbox-like file sync for your own GitHub account.** GotBox keeps a folder on
+**Cross-machine file sync for your own GitHub account.** GotBox keeps a folder on
 your computer in sync across all your machines — edit a file, and it's
 automatically saved, versioned, and pushed to a **private GitHub repository**;
 changes from your other machines flow back automatically. No proprietary cloud,
@@ -82,7 +82,7 @@ other machines on a timer, and keeps the repos small by trimming old history.
 - **Lightweight tray app** — colored tray icon shows sync state; background
   daemon mode; optional start-on-login.
 - **File-manager status badges** *(Windows & macOS)* — optional
-  TortoiseGit/Dropbox-style icon overlays show per-file synced / modified /
+  TortoiseGit-style icon overlays show per-file synced / modified /
   conflict status right in File Explorer / Finder (see
   [Explorer icon overlays](#explorer-icon-overlays-windows) and
   [Finder icon overlays](#finder-icon-overlays-macos)).
@@ -259,7 +259,7 @@ badges to show. To turn them off, run `gotbox --unregister-overlays`
 
 > **Note:** Windows allows only ~15 overlay handlers total across all apps, in
 > alphabetical priority. GotBox registers its three with leading spaces to rank
-> high, but if you run many overlay providers (Dropbox, OneDrive, TortoiseGit…)
+> high, but if you run many overlay providers
 > some may not get a slot — a Windows limitation, not a GotBox bug.
 
 ### Finder icon overlays (macOS)

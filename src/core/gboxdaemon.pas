@@ -1,5 +1,5 @@
 {
-  GotBox -- Dropbox-like file sync over your own private git repositories.
+  GotBox -- Cross-machine file sync over your own private git repositories.
   Copyright (C) 2026 Qianqian Fang <fangqq at gmail.com>.
 
   This program is free software: you can redistribute it and/or modify it under
@@ -132,7 +132,7 @@ end;
 function UsageText: string;
 begin
   Result :=
-    'GotBox -- Dropbox-like file sync over GitHub private repos' +
+    'GotBox -- Cross-machine file sync over GitHub private repos' +
     LineEnding + LineEnding + 'Usage: gotbox [options]' + LineEnding +
     LineEnding + 'Options:' + LineEnding +
     '  -d, --daemon   detach from the terminal and run in the background' +

@@ -1,5 +1,5 @@
 {
-  GotBox -- Dropbox-like file sync over your own private git repositories.
+  GotBox -- Cross-machine file sync over your own private git repositories.
   Copyright (C) 2026 Qianqian Fang <fangqq at gmail.com>.
 
   This program is free software: you can redistribute it and/or modify it under
@@ -367,7 +367,7 @@ begin
   try
     for i := 0 to High(subs) do
       subNames.Add(subs[i].LocalName);
-    // the .gotbox root always syncs automatically (loose files, Dropbox-style)
+    // the .gotbox root always syncs automatically (loose files, auto-synced)
     if Assigned(FStatus) then FStatus.SetMode(GOTBOX_REPO, True);
     SpawnWorker(GOTBOX_REPO, FCfg.RootDir, True, subNames);
   finally

@@ -1,5 +1,5 @@
 {
-  GotBox -- Dropbox-like file sync over your own private git repositories.
+  GotBox -- Cross-machine file sync over your own private git repositories.
   Copyright (C) 2026 Qianqian Fang <fangqq at gmail.com>.
 
   This program is free software: you can redistribute it and/or modify it under
@@ -1424,7 +1424,7 @@ begin
     lbl.SetBounds(104, 52, 300, 34);
     lbl.WordWrap := True;
     lbl.AutoSize := False;
-    lbl.Caption := 'Dropbox-like file sync over your own private git repositories.';
+    lbl.Caption := 'Cross-machine file sync over your own private git repositories.';
 
     // A read-only, borderless memo (not a TLabel): LCL's gtk2 TLabel drops
     // explicit line breaks, so multi-line text collapsed onto one line on Linux

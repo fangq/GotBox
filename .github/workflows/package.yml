@@ -94,7 +94,7 @@ jobs:
             echo "Recommends: libsecret-tools, git-lfs"
             echo "Maintainer: Qianqian Fang <q.fang@northeastern.edu>"
             echo "Homepage: https://github.com/fangq/GotBox"
-            echo "Description: Dropbox-like file sync over GitHub private repos"
+            echo "Description: Cross-machine file sync over GitHub private repos"
             echo " GotBox gives an edit-locally, auto-sync-everywhere experience"
             echo " backed by GitHub private repos instead of a proprietary cloud."
             echo " It watches a root folder, auto-commits and pushes changes,"

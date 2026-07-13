@@ -1,5 +1,5 @@
 {
-  GotBox -- Dropbox-like file sync over your own private git repositories.
+  GotBox -- Cross-machine file sync over your own private git repositories.
   Copyright (C) 2026 Qianqian Fang <fangqq at gmail.com>.
 
   This program is free software: you can redistribute it and/or modify it under
