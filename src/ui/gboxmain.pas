@@ -1366,6 +1366,7 @@ var
   f: TForm;
   img: TImage;
   lbl: TLabel;
+  mem: TMemo;
   btn: TButton;
   i, best, bestW, big, bigW: Integer;
 begin
@@ -1425,12 +1426,20 @@ begin
     lbl.AutoSize := False;
     lbl.Caption := 'Dropbox-like file sync over your own private git repositories.';
 
-    lbl := TLabel.Create(f);         // author / project / license
-    lbl.Parent := f;
-    lbl.SetBounds(24, 104, 382, 250);
-    lbl.WordWrap := True;
-    lbl.AutoSize := False;
-    lbl.Caption :=
+    // A read-only, borderless memo (not a TLabel): LCL's gtk2 TLabel drops
+    // explicit line breaks, so multi-line text collapsed onto one line on Linux
+    // while working on Windows. TMemo.Lines.Text parses line breaks the same on
+    // every widgetset, and read-only selectable text also lets users copy links.
+    mem := TMemo.Create(f);          // author / project / license
+    mem.Parent := f;
+    mem.SetBounds(24, 104, 382, 250);
+    mem.BorderStyle := bsNone;
+    mem.ReadOnly := True;
+    mem.TabStop := False;
+    mem.WordWrap := True;
+    mem.ScrollBars := ssNone;
+    mem.ParentColor := True;         // blend into the dialog, not a text box
+    mem.Lines.Text :=
       'Lives in the system tray and keeps a folder in sync across your ' +
       'machines using your own private git repositories -- edit locally, ' +
       'auto-sync everywhere.' + LineEnding + LineEnding +
