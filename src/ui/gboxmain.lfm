@@ -12,6 +12,7 @@ object MainForm: TMainForm
   Visible = False
   object TrayIcon: TTrayIcon
     PopUpMenu = TrayMenu
+    OnClick = TrayIconClick
     OnDblClick = TrayIconDblClick
     Left = 24
     Top = 16

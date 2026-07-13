@@ -1,10 +1,10 @@
 object StatusForm: TStatusForm
   Left = 0
-  Height = 560
+  Height = 606
   Top = 0
   Width = 600
   Caption = 'GotBox - Status'
-  ClientHeight = 560
+  ClientHeight = 606
   ClientWidth = 600
   Position = poScreenCenter
   OnCreate = FormCreate
@@ -147,6 +147,56 @@ object StatusForm: TStatusForm
     ReadOnly = True
     ScrollBars = ssAutoBoth
     TabOrder = 10
+  end
+  object btnAccount: TButton
+    Left = 12
+    Height = 30
+    Top = 566
+    Width = 100
+    Anchors = [akLeft, akBottom]
+    Caption = 'Account...'
+    OnClick = btnAccountClick
+    TabOrder = 11
+  end
+  object btnSettings: TButton
+    Left = 118
+    Height = 30
+    Top = 566
+    Width = 100
+    Anchors = [akLeft, akBottom]
+    Caption = 'Settings...'
+    OnClick = btnSettingsClick
+    TabOrder = 12
+  end
+  object btnLink: TButton
+    Left = 224
+    Height = 30
+    Top = 566
+    Width = 140
+    Anchors = [akLeft, akBottom]
+    Caption = 'Link submodule...'
+    OnClick = btnLinkClick
+    TabOrder = 13
+  end
+  object btnSyncAll: TButton
+    Left = 370
+    Height = 30
+    Top = 566
+    Width = 100
+    Anchors = [akLeft, akBottom]
+    Caption = 'Sync all'
+    OnClick = btnSyncAllClick
+    TabOrder = 14
+  end
+  object btnQuit: TButton
+    Left = 488
+    Height = 30
+    Top = 566
+    Width = 100
+    Anchors = [akRight, akBottom]
+    Caption = 'Quit GotBox'
+    OnClick = btnQuitClick
+    TabOrder = 15
   end
   object refreshTimer: TTimer
     Interval = 1500

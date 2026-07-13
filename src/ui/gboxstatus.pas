@@ -53,6 +53,11 @@ type
     btnSync: TButton;
     btnOpen: TButton;
     btnWeb: TButton;
+    btnAccount: TButton;
+    btnSettings: TButton;
+    btnLink: TButton;
+    btnSyncAll: TButton;
+    btnQuit: TButton;
     refreshTimer: TTimer;
     procedure FormCreate(Sender: TObject);
     procedure refreshTimerTimer(Sender: TObject);
@@ -62,6 +67,11 @@ type
     procedure btnWebClick(Sender: TObject);
     procedure btnAddTagClick(Sender: TObject);
     procedure btnSquashClick(Sender: TObject);
+    procedure btnAccountClick(Sender: TObject);
+    procedure btnSettingsClick(Sender: TObject);
+    procedure btnLinkClick(Sender: TObject);
+    procedure btnSyncAllClick(Sender: TObject);
+    procedure btnQuitClick(Sender: TObject);
   private
     FStatus: TStatusModel;
     FOnTogglePause: TRepoActionEvent;
@@ -71,6 +81,13 @@ type
     FOnListTags: TRepoTagsQuery;
     FOnAddTag: TRepoTagAdd;
     FOnSquashTags: TRepoActionEvent;
+    // global (repo-independent) actions -- give x2go/NX users a full control
+    // centre in this window, since the tray menu can't pop over a remote panel
+    FOnAccount: TNotifyEvent;
+    FOnSettings: TNotifyEvent;
+    FOnLinkSub: TNotifyEvent;
+    FOnSyncAll: TNotifyEvent;
+    FOnQuit: TNotifyEvent;
     FTagsRepo: string;      // repo whose tags lstTags currently shows
     FLastGridSig: string;   // only redraw grid/log when content actually changes
     FLastLog: string;
@@ -88,6 +105,11 @@ type
     property OnListTags: TRepoTagsQuery read FOnListTags write FOnListTags;
     property OnAddTag: TRepoTagAdd read FOnAddTag write FOnAddTag;
     property OnSquashTags: TRepoActionEvent read FOnSquashTags write FOnSquashTags;
+    property OnAccount: TNotifyEvent read FOnAccount write FOnAccount;
+    property OnSettings: TNotifyEvent read FOnSettings write FOnSettings;
+    property OnLinkSub: TNotifyEvent read FOnLinkSub write FOnLinkSub;
+    property OnSyncAll: TNotifyEvent read FOnSyncAll write FOnSyncAll;
+    property OnQuit: TNotifyEvent read FOnQuit write FOnQuit;
   end;
 
 var
@@ -226,6 +248,31 @@ begin
     FOnSquashTags(r);   // the main form confirms + stops/squashes/restarts
     RefreshTags(r);
   end;
+end;
+
+procedure TStatusForm.btnAccountClick(Sender: TObject);
+begin
+  if Assigned(FOnAccount) then FOnAccount(Self);
+end;
+
+procedure TStatusForm.btnSettingsClick(Sender: TObject);
+begin
+  if Assigned(FOnSettings) then FOnSettings(Self);
+end;
+
+procedure TStatusForm.btnLinkClick(Sender: TObject);
+begin
+  if Assigned(FOnLinkSub) then FOnLinkSub(Self);
+end;
+
+procedure TStatusForm.btnSyncAllClick(Sender: TObject);
+begin
+  if Assigned(FOnSyncAll) then FOnSyncAll(Self);
+end;
+
+procedure TStatusForm.btnQuitClick(Sender: TObject);
+begin
+  if Assigned(FOnQuit) then FOnQuit(Self);
 end;
 
 procedure TStatusForm.Refresh;

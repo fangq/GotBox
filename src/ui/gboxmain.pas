@@ -38,6 +38,7 @@ type
     TrayMenu: TPopupMenu;
     procedure FormCreate(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
+    procedure TrayIconClick(Sender: TObject);
     procedure TrayIconDblClick(Sender: TObject);
   private
     FConfig: TGotConfig;
@@ -874,6 +875,15 @@ begin
   end;
 end;
 
+{ Left-click opens the Status window (which doubles as a control centre). This
+  is the reliable entry point where the tray context menu can't pop -- notably
+  over x2go/NX, whose panels won't render a StatusNotifier dbusmenu. Right-click
+  still shows the menu on desktops that support it. }
+procedure TMainForm.TrayIconClick(Sender: TObject);
+begin
+  mnuStatus(Sender);
+end;
+
 procedure TMainForm.TrayIconDblClick(Sender: TObject);
 begin
   mnuStatus(Sender);
@@ -1023,6 +1033,13 @@ begin
   StatusForm.OnListTags := @HandleListTags;
   StatusForm.OnAddTag := @HandleAddTag;
   StatusForm.OnSquashTags := @HandleSquashTags;
+  // global actions -- reuse the tray-menu handlers so the Status window is a
+  // full control centre when the tray menu can't pop (x2go/NX)
+  StatusForm.OnAccount := @mnuAccount;
+  StatusForm.OnSettings := @mnuSettings;
+  StatusForm.OnLinkSub := @mnuLinkSub;
+  StatusForm.OnSyncAll := @mnuSyncNow;
+  StatusForm.OnQuit := @mnuQuit;
   StatusForm.Bind(FStatus);
   if not StatusForm.Visible then
   begin
