@@ -36,6 +36,9 @@ LAZDIR := $(if $(LAZARUSDIR),--lazarusdir="$(LAZARUSDIR)")
 PROJECT  := gotbox.lpi
 BIN      := gotbox
 JCFCFG   := tools/jcfsettings.cfg
+# JCF can't parse Objective-Pascal, so skip src/mac (objcclass externals for the
+# Finder Sync extension). Format every other src subdirectory.
+FMTDIRS  := $(filter-out src/mac,$(wildcard src/*))
 RES      := gotbox.res
 ICON     := assets/gotbox.ico
 TESTOUT  := tests/lib
@@ -117,12 +120,13 @@ tests:
 # ---- formatting -----------------------------------------------------------
 format:
 	@test -x "$(JCF)" || { echo "JCF not found at $(JCF); run 'make jcf'"; exit 1; }
-	$(JCF) -clarify -R -inplace -y -config=$(JCFCFG) src
+	$(JCF) -clarify -R -inplace -y -config=$(JCFCFG) $(FMTDIRS)
 
 format-check:
 	@test -x "$(JCF)" || { echo "JCF not found at $(JCF); run 'make jcf'"; exit 1; }
 	@tmp=$$(mktemp -d); cp -r src $$tmp/; \
-	 $(JCF) -clarify -R -inplace -y -config=$(JCFCFG) $$tmp/src >/dev/null 2>&1; \
+	 dirs=""; for d in $(FMTDIRS); do dirs="$$dirs $$tmp/$$d"; done; \
+	 $(JCF) -clarify -R -inplace -y -config=$(JCFCFG) $$dirs >/dev/null 2>&1; \
 	 if diff -ru src $$tmp/src; then echo "format OK"; rm -rf $$tmp; \
 	 else echo "** sources need formatting: run 'make format' **"; rm -rf $$tmp; exit 1; fi
 
