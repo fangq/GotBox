@@ -22,6 +22,14 @@ EDGE  = (20, 83, 45)     # #14532d  outline
 BODY  = (39, 158, 95)    # #279e5f  flat box body (the tray "synced" green)
 GCOL  = (237, 237, 237)  # #ededed  the constant light "G"
 
+# per-status body colours -- MUST match gboxmain MakeBox so the tray and the
+# indicator (which resolves gotbox-<state> from the icon theme) look identical.
+# The color code is documented in the README.
+STATES = {"idle": (149, 165, 166), "synced": (39, 158, 95),
+          "syncing": (52, 152, 219), "conflict": (243, 156, 18),
+          "error": (231, 76, 60), "paused": (149, 165, 166),
+          "offline": (127, 140, 141)}
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(ROOT, "assets")
 MASTER = 1024            # render big, then downscale with LANCZOS for crispness
@@ -41,7 +49,7 @@ GEDGES = [("top", "ul"), ("ul", "ll"), ("ll", "bot"),
           ("bot", "lr"), ("lr", "ur"), ("ur", "c")]
 
 
-def render(n):
+def render(n, body=BODY):
     img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
@@ -50,8 +58,8 @@ def render(n):
         s = 1 - 2 * MARGIN
         return ((MARGIN + x * s) * n, (MARGIN + y * s) * n)
 
-    # flat single-tone box body
-    d.polygon([P(k) for k in BODYPTS], fill=BODY)
+    # flat single-tone box body (colour encodes the status)
+    d.polygon([P(k) for k in BODYPTS], fill=body)
 
     # the constant light "G" traced along the box edges (round joins/caps)
     ew = max(2, int(n * 0.11))
@@ -134,10 +142,18 @@ def main():
     write_ico(os.path.join(ASSETS, "gotbox.ico"), master,
               [16, 24, 32, 48, 64, 128, 256])
 
+    # per-status masters, rendered big then downscaled per size for crispness
+    state_masters = {st: render(MASTER, col) for st, col in STATES.items()}
+
     for s in [16, 22, 24, 32, 48, 64, 128, 256]:
         d = os.path.join(ASSETS, "icons", f"{s}x{s}")
         os.makedirs(d, exist_ok=True)
         master.resize((s, s), Image.LANCZOS).save(os.path.join(d, "gotbox.png"))
+        # per-status themed icons: the indicator advertises gotbox-<state> and
+        # the panel resolves these from the icon theme (installed by make install)
+        for st, m in state_masters.items():
+            m.resize((s, s), Image.LANCZOS).save(
+                os.path.join(d, f"gotbox-{st}.png"))
 
     # status badges for the file-manager icon overlays
     for kind in ("synced", "modified", "conflict"):

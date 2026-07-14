@@ -45,6 +45,9 @@ RES      := gotbox.res
 ICON     := assets/gotbox.ico
 TESTOUT  := tests/lib
 ICONSIZES := 16 22 24 32 48 64 128 256
+# the brand icon + per-status themed icons (indicator resolves gotbox-<state>)
+ICONNAMES := gotbox gotbox-idle gotbox-synced gotbox-syncing gotbox-conflict \
+             gotbox-error gotbox-paused gotbox-offline
 
 PASSRC   := $(shell find src -name '*.pas')
 
@@ -166,19 +169,19 @@ install:
 	  echo "(gotboxd not built -- run 'make gotboxd' for the headless server daemon; skipping)"; \
 	fi
 	install -Dm644 packaging/linux/gotbox.desktop $(PREFIX)/share/applications/gotbox.desktop
-	@for s in $(ICONSIZES); do \
-	  install -Dm644 assets/icons/$${s}x$${s}/gotbox.png \
-	    $(PREFIX)/share/icons/hicolor/$${s}x$${s}/apps/gotbox.png; \
-	done
+	@for s in $(ICONSIZES); do for n in $(ICONNAMES); do \
+	  install -Dm644 assets/icons/$${s}x$${s}/$${n}.png \
+	    $(PREFIX)/share/icons/hicolor/$${s}x$${s}/apps/$${n}.png; \
+	done; done
 	-update-desktop-database $(PREFIX)/share/applications 2>/dev/null || true
 	-gtk-update-icon-cache -f -t $(PREFIX)/share/icons/hicolor 2>/dev/null || true
 	@echo "installed to $(PREFIX) (ensure $(PREFIX)/bin is on PATH)"
 
 uninstall:
 	rm -f $(PREFIX)/bin/$(BIN) $(PREFIX)/bin/gotboxd $(PREFIX)/share/applications/gotbox.desktop
-	@for s in $(ICONSIZES); do \
-	  rm -f $(PREFIX)/share/icons/hicolor/$${s}x$${s}/apps/gotbox.png; \
-	done
+	@for s in $(ICONSIZES); do for n in $(ICONNAMES); do \
+	  rm -f $(PREFIX)/share/icons/hicolor/$${s}x$${s}/apps/$${n}.png; \
+	done; done
 	-update-desktop-database $(PREFIX)/share/applications 2>/dev/null || true
 	@echo "uninstalled from $(PREFIX)"
 
