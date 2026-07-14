@@ -71,6 +71,7 @@ type
     FLastFull: TDateTime;         // last time a full sync cycle actually ran
     FSyncedRemoteSha: string;     // origin/main tip as of our last in-sync cycle
     FCommitsSinceGc: Integer;
+    FOfflineStreak: Integer;      // consecutive network-failure cycles (hysteresis)
     FOnNotice: TSyncNoticeEvent;
     FOnReposChanged: TReposChangedEvent;
     FOnCycleDone: TCycleDoneEvent;
@@ -224,6 +225,8 @@ end;
 procedure TRepoWorker.DoSyncCycle;
 const
   TRAY_SYNC_MIN_MS = 450;   // keep "syncing" visible even for an instant cycle
+  OFFLINE_GRACE = 2;        // show "offline" only after this many consecutive
+  // network failures (ignore isolated transient blips)
 var
   git: TGitRunner;
   outcome: TSyncOutcome;
@@ -312,10 +315,18 @@ begin
       end;
       soOffline:
       begin
-        // transient no-network: local work is committed; we retry next cycle.
-        // Not an error -- show a distinct "offline" state, log quietly.
-        if Assigned(FStatus) then FStatus.SetState(FName, rsOffline, detail);
-        if Assigned(Log) then Log.Info('worker', FName + ': ' + detail);
+        // Network failure. Local work is committed; we retry next cycle. Only
+        // show "offline" after OFFLINE_GRACE consecutive failures, so a single
+        // transient blip (a DNS hiccup, a dropped fetch on the frequent poll)
+        // doesn't flicker the icon. Below the threshold, stay optimistic.
+        Inc(FOfflineStreak);
+        if FOfflineStreak >= OFFLINE_GRACE then
+        begin
+          if Assigned(FStatus) then FStatus.SetState(FName, rsOffline, detail);
+          if Assigned(Log) then Log.Info('worker', FName + ': ' + detail);
+        end
+        else if Assigned(FStatus) then
+          FStatus.SetState(FName, rsSynced, 'transient network blip; retrying');
       end;
       soConflict:
       begin
@@ -341,6 +352,9 @@ begin
           Log.Info('worker', FName + ': ' + SyncOutcomeText(outcome));
       end;
     end;
+
+    if outcome <> soOffline then
+      FOfflineStreak := 0;   // any reachable-remote outcome clears the streak
 
     // Remember the remote tip while we're fully in sync, so the periodic
     // ls-remote fast-check (RemoteAdvanced) can skip the full cycle when nothing
