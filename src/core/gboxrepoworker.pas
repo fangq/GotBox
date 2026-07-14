@@ -189,11 +189,14 @@ begin
 end;
 
 procedure TRepoWorker.DoSyncCycle;
+const
+  TRAY_SYNC_MIN_MS = 450;   // keep "syncing" visible even for an instant cycle
 var
   git: TGitRunner;
   outcome: TSyncOutcome;
   detail, td, ntitle, nbody: string;
   conflicts, changed: TStringList;
+  syncStart: TDateTime;
 begin
   // A submodule whose working folder the user deleted: stop syncing it rather
   // than spinning on a missing directory (git would just fail every cycle). The
@@ -208,6 +211,7 @@ begin
   end;
 
   if Assigned(FStatus) then FStatus.SetState(FName, rsSyncing, '');
+  syncStart := Now;
   conflicts := TStringList.Create;
   changed := TStringList.Create;
   git := TGitRunner.Create(FLocalPath);
@@ -256,6 +260,15 @@ begin
       BuildNotice(changed, ntitle, nbody);
       if nbody <> '' then FOnNotice(ntitle, nbody);
     end;
+
+    // Keep the "syncing" state visible for a moment on cycles that actually
+    // transferred data, so a quick edit shows a real blue->green change instead
+    // of appearing static (a fast local commit+push flips syncing->synced faster
+    // than the tray refresh, coalescing the transient away). Idle no-op checks
+    // (soUpToDate) don't hold, so periodic pulls don't flash the tray.
+    if (outcome in [soPushed, soPulled, soMerged, soReset, soConflict]) and
+      (MilliSecondsBetween(Now, syncStart) < TRAY_SYNC_MIN_MS) then
+      Sleep(TRAY_SYNC_MIN_MS - MilliSecondsBetween(Now, syncStart));
 
     case outcome of
       soError:
