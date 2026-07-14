@@ -114,7 +114,7 @@ object ConfigForm: TConfigForm
     MaxValue = 600000
     MinValue = 500
     TabOrder = 6
-    Value = 5000
+    Value = 10000
   end
   object lblPull: TLabel
     Left = 20

@@ -317,7 +317,7 @@ Key options (defaults in brackets):
 | **SSH base** | For the `git` backend, the base URL, e.g. `ssh://git@host/srv/git`. |
 | **Machine name** | Identifies this computer in commit messages / conflict files. [hostname] |
 | **History cap** | Keep about this many recent commits per repo (20–50). [30] |
-| **Commit debounce** | Wait this long (ms) after the last save before committing. [5000] |
+| **Commit debounce** | Wait this long (ms) of quiet after the last save before committing (batches a burst of saves into one commit). [10000] |
 | **Pull interval** | How often (s) to pull remote changes. [60] |
 | **GC every N commits** | Run git maintenance after this many commits. [25] |
 | **LFS threshold (MB)** | Auto-track files at/above this size with Git LFS; `0` disables. [95] |

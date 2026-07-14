@@ -37,8 +37,8 @@ type
     RemoteUrl: string;   // https remote (without embedded credentials)
     Paused: Boolean;     // user paused syncing for this repo
     AutoSync: Boolean;   // True = auto add/commit/trim like the root; False =
-                         // "managed": transport committed state only, never
-                         // stage/commit/trim (the default -- protects history)
+    // "managed": transport committed state only, never
+    // stage/commit/trim (the default -- protects history)
   end;
   TRepoEntryArray = array of TRepoEntry;
 
@@ -164,7 +164,7 @@ begin
   if MachineName = '' then
     MachineName := 'machine';
   HistoryCap := 30;
-  CommitDebounceMs := 5000;
+  CommitDebounceMs := 10000;   // batch a burst of saves into one commit (10 s quiet)
   PullIntervalSec := 60;
   GcEveryNCommits := 25;
   // default just under GitHub's 100 MB hard push limit, so LFS only engages for
