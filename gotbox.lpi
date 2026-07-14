@@ -57,11 +57,16 @@
         <PackageName Value="LCL"/>
       </Item1>
     </RequiredPackages>
-    <Units Count="26">
+    <Units Count="27">
       <Unit0>
         <Filename Value="gotbox.lpr"/>
         <IsPartOfProject Value="True"/>
       </Unit0>
+      <Unit26>
+        <Filename Value="src/ui/gboxappind.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxappind"/>
+      </Unit26>
       <Unit1>
         <Filename Value="src/ui/gboxmain.pas"/>
         <IsPartOfProject Value="True"/>

@@ -30,7 +30,8 @@ uses
   StdCtrls, Dialogs, LCLType, LCLIntf, IntfGraphics, GraphType, fpimage,
   gboxconfigstore, gboxstatusmodel, gboxlog,
   gboxcredstore, gboxengine, gboxsuper, gboxfilewatcher, gboxrootlock, gboxmsg,
-  gboxfilestatus, gboxoverlayipc, gboxdaemon, gboxgitrunner, gboxhistory;
+  gboxfilestatus, gboxoverlayipc, gboxdaemon, gboxgitrunner, gboxhistory,
+  gboxappind;
 
 type
   TMainForm = class(TForm)
@@ -45,12 +46,16 @@ type
     FStore: TConfigStore;
     FStatus: TStatusModel;
     FEngine: TSyncEngine;
+    FAppInd: Boolean;             // Linux: driving our own libayatana-appindicator
+    {$IFDEF LINUX}
+    FAppStatusItem: Pointer;      // the disabled "Status: ..." line in that menu
+    {$ENDIF}
     FStatusCache: TStatusCache;   // per-file status for the file-manager overlay
     FOverlay: TOverlayServer;     // answers overlay queries from FStatusCache
     FLastAgg: TRepoState;
     FTrayShown: Boolean;   // has the tray icon been set at least once?
     FStatusItem: TMenuItem;   // disabled top menu item mirroring the state (tray
-                              // tooltips are unreliable on Linux SNI/xfce)
+    // tooltips are unreliable on Linux SNI/xfce)
     FIcons: array[TRepoState] of TIcon;
     FBootWatcher: TFileWatcher;
     // qualified: an LCL unit in the uses clause shadows TCriticalSection with
@@ -70,6 +75,9 @@ type
     FIconKicks: Integer;                     // remaining repaint attempts
     procedure ScaleTick(Sender: TObject);
     procedure IconKickTick(Sender: TObject);
+    function TryStartAppIndicator: Boolean;  // direct StatusNotifier tray (stable icon)
+    procedure ExportTrayIcons(const ADir: string);
+    procedure AppIndAction(AId: PtrInt);     // dispatch appindicator menu clicks
     {$ENDIF}
     {$IFDEF UNIX}
     procedure StatusSignalTick(Sender: TObject);
@@ -136,7 +144,7 @@ uses
   {$IFDEF UNIX}BaseUnix, ctypes,{$ENDIF}
   gboxconfig, gboxlogin, gboxstatus, gboxlinksub;
 
-{$IFDEF UNIX}
+  {$IFDEF UNIX}
 var
   { Set by the SIGUSR1 handler (async-signal context: only touch this flag).
     A GUI timer polls it and opens the Status window -- used by `gotbox --status`
@@ -147,7 +155,7 @@ procedure HandleSigUsr1(sig: cint); cdecl;
 begin
   GShowStatusRequested := True;
 end;
-{$ENDIF}
+  {$ENDIF}
 
 type
   { One-shot worker that runs the heavy startup bring-up off the GUI thread. }
@@ -220,8 +228,14 @@ begin
     BuildTrayMenu;
     TrayIcon.PopUpMenu := TrayMenu;
     TrayIcon.Hint := 'GotBox';
-    TrayIcon.Visible := True;
     FLastAgg := rsIdle;
+    {$IFDEF LINUX}
+    // Prefer our own StatusNotifier item (stable named icon that indicator
+    // panels actually render); fall back to LCL's TTrayIcon if unavailable.
+    FAppInd := TryStartAppIndicator;
+    {$ENDIF}
+    if not FAppInd then
+      TrayIcon.Visible := True;
     UpdateTrayState;
   except
     on E: Exception do
@@ -241,11 +255,15 @@ begin
   // ~10s and the placeholder stays gray until then. Repaint the icon every couple
   // of seconds for a while so the real colour appears the instant the embed
   // completes, instead of lingering gray until the first status change.
-  FIconKicks := 8;                           // ~16s of coverage at 2s spacing
-  FIconKickTimer := TTimer.Create(Self);
-  FIconKickTimer.Interval := 2000;
-  FIconKickTimer.OnTimer := @IconKickTick;
-  FIconKickTimer.Enabled := True;
+  // (Not needed when we drive our own appindicator -- it owns the icon.)
+  if not FAppInd then
+  begin
+    FIconKicks := 8;                         // ~16s of coverage at 2s spacing
+    FIconKickTimer := TTimer.Create(Self);
+    FIconKickTimer.Interval := 2000;
+    FIconKickTimer.OnTimer := @IconKickTick;
+    FIconKickTimer.Enabled := True;
+  end;
   {$ENDIF}
 
   {$IFDEF UNIX}
@@ -288,6 +306,99 @@ begin
   // (see FIconKickTimer setup); harmless on backends that painted correctly.
   FTrayShown := False;
   UpdateTrayState;
+end;
+
+{ Short icon-name suffix per state (gotbox-<key>.png in the tray theme dir). }
+function StateKey(AState: TRepoState): string;
+begin
+  case AState of
+    rsError: Result := 'error';
+    rsConflict: Result := 'conflict';
+    rsSyncing: Result := 'syncing';
+    rsPaused: Result := 'paused';
+    rsOffline: Result := 'offline';
+    rsIdle: Result := 'idle';
+    else
+      Result := 'synced';
+  end;
+end;
+
+{ Write the per-state box icons as stable-named PNGs into ADir, so the indicator
+  can resolve them by name (gotbox-idle, gotbox-synced, ...). }
+procedure TMainForm.ExportTrayIcons(const ADir: string);
+var
+  st: TRepoState;
+  png: TPortableNetworkGraphic;
+begin
+  for st := Low(TRepoState) to High(TRepoState) do
+  begin
+    if not Assigned(FIcons[st]) then Continue;
+    png := TPortableNetworkGraphic.Create;
+    try
+      png.Assign(FIcons[st]);
+      png.SaveToFile(IncludeTrailingPathDelimiter(ADir) + 'gotbox-' +
+        StateKey(st) + '.png');
+    finally
+      png.Free;
+    end;
+  end;
+end;
+
+{ Drive our own StatusNotifier item via libayatana-appindicator, advertising a
+  stable icon name from a persistent dir (like Dropbox) so the ayatana indicator
+  plugin shows the real GotBox icon instead of a generic fallback. Returns False
+  (caller falls back to LCL's TTrayIcon) if the library isn't available. }
+function TMainForm.TryStartAppIndicator: Boolean;
+var
+  dir: string;
+begin
+  Result := False;
+  if not AppIndAvailable then Exit;
+  try
+    dir := IncludeTrailingPathDelimiter(GotDataDir) + 'tray';
+    ForceDirectories(dir);
+    ExportTrayIcons(dir);
+    AppIndBegin('gotbox', 'gotbox-' + StateKey(rsIdle), dir, @AppIndAction);
+    // menu mirrors BuildTrayMenu (Linux order); ids map to handlers in AppIndAction
+    FAppStatusItem := AppIndAddItem('Status: starting...', -1);
+    AppIndAddSeparator;
+    AppIndAddItem('Open root folder', 0);
+    AppIndAddItem('Link submodule...', 1);
+    AppIndAddItem('Sync now', 2);
+    AppIndAddSeparator;
+    AppIndAddItem('Status...', 3);
+    AppIndAddItem('Settings...', 4);
+    AppIndAddItem('Account...', 5);
+    AppIndAddItem('Export log...', 6);
+    AppIndAddSeparator;
+    AppIndAddItem('About', 7);
+    AppIndAddItem('Quit', 8);
+    AppIndShow;
+    Result := True;
+    if Assigned(Log) then
+      Log.Info('ui', 'tray via libayatana-appindicator (stable "gotbox" icon)');
+  except
+    on E: Exception do
+    begin
+      if Assigned(Log) then Log.Warn('ui', 'appindicator init failed: ' + E.Message);
+      Result := False;
+    end;
+  end;
+end;
+
+procedure TMainForm.AppIndAction(AId: PtrInt);
+begin
+  case AId of
+    0: mnuOpenRoot(nil);
+    1: mnuLinkSub(nil);
+    2: mnuSyncNow(nil);
+    3: mnuStatus(nil);
+    4: mnuSettings(nil);
+    5: mnuAccount(nil);
+    6: mnuExportLog(nil);
+    7: mnuAbout(nil);
+    8: mnuQuit(nil);
+  end;
 end;
 {$ENDIF}
 
@@ -557,6 +668,16 @@ begin
     FStatusItem.Caption := 'Status: ' + s;
 
   // swap the tray icon colour to match the aggregate state
+  {$IFDEF LINUX}
+  if FAppInd then
+  begin
+    // our own indicator: switch to the stable per-state icon name + a11y text
+    AppIndSetIcon('gotbox-' + StateKey(agg), 'GotBox - ' + s);
+    if FAppStatusItem <> nil then
+      AppIndSetItemLabel(FAppStatusItem, 'Status: ' + s);
+  end
+  else
+  {$ENDIF}
   if Assigned(FIcons[agg]) then
   begin
     TrayIcon.Icon := FIcons[agg];
@@ -826,7 +947,8 @@ begin
   end;
   if haveCreds then Exit;
 
-  if Assigned(Log) then Log.Info('ui', 'no GitHub credentials yet; awaiting Account sign-in');
+  if Assigned(Log) then Log.Info('ui',
+      'no GitHub credentials yet; awaiting Account sign-in');
   if Assigned(FStatusItem) then
     FStatusItem.Caption := 'Not signed in - open Account... to connect GitHub';
   TrayIcon.Hint := 'GotBox - not signed in';
@@ -1193,8 +1315,8 @@ begin
     git.Free;
   end;
   for i := 0 to High(tags) do
-    AOut.Add(tags[i].Label_ + '   ·   ' + tags[i].Subject +
-      '   (' + tags[i].Date + ')');
+    AOut.Add(tags[i].Label_ + '   ·   ' + tags[i].Subject + '   (' +
+      tags[i].Date + ')');
 end;
 
 procedure TMainForm.HandleAddTag(const ARepo, ALabel, AMessage: string);
@@ -1225,8 +1347,8 @@ var
   git: TGitRunner;
   token, err, detail: string;
 begin
-  if not MsgConfirm('Squash all commits between tags in "' + ARepo + '"?' +
-    LineEnding + LineEnding +
+  if not MsgConfirm('Squash all commits between tags in "' + ARepo +
+    '"?' + LineEnding + LineEnding +
     'This REWRITES history and force-pushes. Other machines will reset to ' +
     'match on their next sync. Your tagged snapshots and the commits after the ' +
     'newest tag are preserved; the machine-stamped commits between tags are ' +
@@ -1446,9 +1568,8 @@ begin
       'Author: Qianqian Fang <fangqq at gmail.com>' + LineEnding +
       'Project: https://github.com/fangq/GotBox' + LineEnding +
       'Issues: https://github.com/fangq/GotBox/issues' + LineEnding +
-      LineEnding +
-      'License: GNU General Public License, version 3 or later (GPLv3+).' +
-      LineEnding + 'Distributed WITHOUT ANY WARRANTY; see LICENSE.txt.' +
+      LineEnding + 'License: GNU General Public License, version 3 or later (GPLv3+).'
+      + LineEnding + 'Distributed WITHOUT ANY WARRANTY; see LICENSE.txt.' +
       LineEnding + LineEnding +
       'Commercial use: if the GPLv3 conflicts with your use (e.g. embedding ' +
       'in closed-source software), contact the author for a separate ' +
