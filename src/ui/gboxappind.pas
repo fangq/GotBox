@@ -130,10 +130,16 @@ procedure AppIndBegin(const AId, AIconName, AThemePath: string;
 begin
   gAction := AOnAction;
   gMenu := gtk_menu_new;
-  gInd := ai_new(PChar(AId), PChar(AIconName),
+  // Create with the id as the initial icon (resolvable in the system theme), so
+  // the first lookup doesn't fail before our theme path is registered. THEN add
+  // the per-status dir and switch to the requested icon -- otherwise the panel
+  // caches the failed initial lookup and keeps showing a fallback icon.
+  gInd := ai_new(PChar(AId), PChar(AId),
     APP_INDICATOR_CATEGORY_APPLICATION_STATUS);
   if AThemePath <> '' then
     ai_set_theme_path(gInd, PChar(AThemePath));
+  if (AIconName <> '') and (AIconName <> AId) then
+    ai_set_icon_full(gInd, PChar(AIconName), PChar(AId));
 end;
 
 function AppIndAddItem(const ACaption: string; AActionId: PtrInt): Pointer;

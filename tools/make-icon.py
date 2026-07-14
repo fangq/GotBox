@@ -13,12 +13,14 @@ import os
 import struct
 from PIL import Image, ImageDraw
 
-# brand palette (matches the "synced" green used by the tray status dots)
-TOP   = (88, 214, 141)   # #58d68d  light  (top face)
-LEFT  = (46, 204, 113)   # #2ecc71  mid    (left face)
-RIGHT = (34, 153, 84)    # #229954  dark   (right face)
+# brand palette
+LEFT  = (46, 204, 113)   # #2ecc71  (badge fill)
 EDGE  = (20, 83, 45)     # #14532d  outline
-TAPE  = (241, 243, 244)  # #f1f3f4  packing-tape highlight
+# the app/brand icon matches the tray icon (gboxmain MakeBox / gbox.svg): a flat
+# single-tone box with a light "G" traced along its edges -- so every place the
+# icon appears (tray, taskbar, indicator fallback) is the same G-outlined box.
+BODY  = (39, 158, 95)    # #279e5f  flat box body (the tray "synced" green)
+GCOL  = (237, 237, 237)  # #ededed  the constant light "G"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(ROOT, "assets")
@@ -31,9 +33,8 @@ MARGIN = 0.09            # inset so the G stroke isn't clipped at the edges
 V = {"top": (0.50, 0.00), "ul": (0.00, 0.25), "ur": (1.00, 0.25),
      "c":   (0.50, 0.50), "ll": (0.00, 0.75), "lr": (1.00, 0.75),
      "bot": (0.50, 1.00)}
-FACES = [("top", ["top", "ur", "c", "ul"]),
-         ("left", ["ul", "c", "bot", "ll"]),
-         ("right", ["c", "ur", "lr", "bot"])]
+# flat box silhouette (hexagon), single tone
+BODYPTS = ["top", "ur", "lr", "bot", "ll", "ul"]
 # The G: walk the silhouette top->ul->ll->bot->lr->ur (skipping the top->ur edge,
 # which leaves the G's mouth), then ur->c as the inward tongue.
 GEDGES = [("top", "ul"), ("ul", "ll"), ("ll", "bot"),
@@ -49,18 +50,17 @@ def render(n):
         s = 1 - 2 * MARGIN
         return ((MARGIN + x * s) * n, (MARGIN + y * s) * n)
 
-    face_fill = {"top": TOP, "left": LEFT, "right": RIGHT}
-    for name, verts in FACES:
-        d.polygon([P(k) for k in verts], fill=face_fill[name])
+    # flat single-tone box body
+    d.polygon([P(k) for k in BODYPTS], fill=BODY)
 
-    # the constant "G" outline traced along the box edges (round joins/caps)
-    ew = max(1, int(n * 0.05))
+    # the constant light "G" traced along the box edges (round joins/caps)
+    ew = max(2, int(n * 0.11))
     for a, b in GEDGES:
-        d.line([P(a), P(b)], fill=TAPE, width=ew, joint="curve")
+        d.line([P(a), P(b)], fill=GCOL, width=ew, joint="curve")
     r = ew * 0.5
     for k in {e for pair in GEDGES for e in pair}:
         x, y = P(k)
-        d.ellipse([x - r, y - r, x + r, y + r], fill=TAPE)
+        d.ellipse([x - r, y - r, x + r, y + r], fill=GCOL)
 
     return img
 
