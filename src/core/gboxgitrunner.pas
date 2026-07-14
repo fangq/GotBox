@@ -33,16 +33,20 @@ uses
   Classes, SysUtils, DateUtils, Process;
 
 const
-  { Network git ops (fetch/push/pull/clone/ls-remote) abort after this long
-    instead of hanging on a stalled connection. }
-  GIT_NET_TIMEOUT_MS = 60000;
-  { Backstop for ANY git op that doesn't pass its own timeout. Applied by the
-    TGitRunner constructor, so every op is bounded unless a caller explicitly
-    opts out (DefaultTimeoutMs := 0). A local op that runs this long is stuck
-    (e.g. a Windows file-lock deadlock on a shared repo); killing it lets a
-    worker's cycle -- or a main-thread reconcile -- end instead of hanging
-    forever. 60s matches the network cap (proven safe on the ~10x-slower Windows
-    CI) and is well above any real local op on these small repos. }
+  { STALL cap for network git ops (fetch/push/pull/clone/ls-remote): abort only
+    after the op has gone this long WITHOUT emitting any output. These ops pass
+    --progress, so an active transfer keeps writing byte-progress on stderr and
+    can legitimately run for minutes; only a genuinely stalled connection goes
+    silent this long and is killed. (Not a total-duration cap -- that killed
+    healthy large fetches, pinning the repo "offline" and leaking a partial pack
+    on every retry.) }
+  GIT_NET_TIMEOUT_MS = 30000;
+  { Backstop stall cap for ANY git op that doesn't pass its own timeout. Applied
+    by the TGitRunner constructor, so every op is bounded unless a caller opts
+    out (DefaultTimeoutMs := 0). An op silent this long is stuck (e.g. a Windows
+    file-lock deadlock on a shared repo); killing it lets a worker's cycle -- or
+    a main-thread reconcile -- end instead of hanging forever. Higher than the
+    network cap since local ops emit less incremental output. }
   GIT_DEFAULT_TIMEOUT_MS = 60000;
 
 type
@@ -100,6 +104,11 @@ type
     function Push(AForce: Boolean = False): TGitResult;
     function Fetch: TGitResult;
     function PullRebase: TGitResult;
+    { Delete stale partial packs (tmp_pack_*) left in this repo's object store by
+      fetches killed mid-transfer. Skips any file modified within the last
+      AMinAgeSec seconds, so an actively-downloading pack (its mtime advances as
+      bytes land) is never touched. Safe no-op if there are none. }
+    procedure PrunePartialPacks(AMinAgeSec: Integer = 60);
     function Merge(const ARef: string): TGitResult;
     function CountRange(const ARange: string): Integer; // commits in ARange (-1 err)
     function ShowStage(AStage: Integer; const APath: string): TGitResult;
@@ -243,7 +252,7 @@ var
   buf: array[0..4095] of Byte;
   i, idle: Integer;
   cmdline, trace: string;
-  started: TDateTime;
+  started, lastData: TDateTime;
   timedOut: Boolean;
 
   { Read whatever is currently available on both pipes; return bytes read. }
@@ -317,6 +326,7 @@ begin
 
     proc.Execute;
     started := Now;
+    lastData := started;   // stall clock: reset whenever the child emits bytes
     timedOut := False;
     if GitTraceOn then
     begin
@@ -333,14 +343,24 @@ begin
     idle := 0;
     repeat
       if DrainAvail > 0 then
-        idle := 0
+      begin
+        idle := 0;
+        lastData := Now;        // progress: reset the stall clock
+      end
       else if not proc.Running then
         Inc(idle);              // exited + nothing read: count quiet polls
       if idle >= 4 then Break;   // ~4ms of quiet after exit: pipes are drained
 
-      // abort a stalled network op rather than block the worker forever
+      // Abort only when the child has been SILENT for ATimeoutMs -- a genuine
+      // stall, not a slow-but-progressing transfer. Network ops pass --progress,
+      // so an active fetch/clone/push keeps emitting byte-progress on stderr and
+      // never trips this even if it legitimately runs for minutes; a truly
+      // stalled connection (or a hung/deadlocked local op) goes quiet and is
+      // killed. (Previously this was a total-duration cap, which killed healthy
+      // large fetches -- leaving the repo permanently "offline" and leaking a
+      // partial pack each retry.)
       if proc.Running and (ATimeoutMs > 0) and
-        (MilliSecondsBetween(Now, started) >= ATimeoutMs) then
+        (MilliSecondsBetween(Now, lastData) >= ATimeoutMs) then
       begin
         timedOut := True;
         proc.Terminate(124);   // SIGTERM-equivalent; conventional "timed out" code
@@ -354,7 +374,7 @@ begin
       Result.ExitCode := 124;
       Result.StdOut := outStream.DataString;
       // contains "timed out" so callers classify it as an offline/network error
-      Result.StdErr := Format('git timed out after %d s (network stalled)',
+      Result.StdErr := Format('git timed out: no data for %d s (stalled)',
         [ATimeoutMs div 1000]);
     end
     else
@@ -409,7 +429,9 @@ end;
 
 function TGitRunner.Clone(const AUrl, ADest: string): TGitResult;
 begin
-  Result := Run(['clone', AUrl, ADest], GIT_NET_TIMEOUT_MS);
+  // --progress: force byte-progress on stderr (git suppresses it on a non-tty
+  // pipe) so the stall cap sees an active transfer as "still moving"
+  Result := Run(['clone', '--progress', AUrl, ADest], GIT_NET_TIMEOUT_MS);
 end;
 
 function TGitRunner.AddAll: TGitResult;
@@ -424,25 +446,75 @@ end;
 
 function TGitRunner.Push(AForce: Boolean): TGitResult;
 begin
+  // --progress keeps the stall cap fed during the upload (see Clone)
   if AForce then
-    Result := Run(['push', '--force-with-lease', 'origin', 'HEAD'], GIT_NET_TIMEOUT_MS)
+    Result := Run(['push', '--progress', '--force-with-lease', 'origin', 'HEAD'],
+      GIT_NET_TIMEOUT_MS)
   else
-    Result := Run(['push', 'origin', 'HEAD'], GIT_NET_TIMEOUT_MS);
+    Result := Run(['push', '--progress', 'origin', 'HEAD'], GIT_NET_TIMEOUT_MS);
+end;
+
+{ Cross-platform absolute-path test (SysUtils has none; FileUtil is LCL, and this
+  unit stays LCL-free). }
+function PathIsAbsolute(const APath: string): Boolean;
+begin
+  {$IFDEF WINDOWS}
+  Result := ((Length(APath) >= 1) and ((APath[1] = '\') or (APath[1] = '/'))) or
+    ((Length(APath) >= 2) and (APath[2] = ':'));   // drive-letter or UNC/root
+  {$ELSE}
+  Result := (Length(APath) >= 1) and (APath[1] = '/');
+  {$ENDIF}
+end;
+
+procedure TGitRunner.PrunePartialPacks(AMinAgeSec: Integer);
+var
+  r: TGitResult;
+  gitDir, packDir, full: string;
+  sr: TSearchRec;
+  ft: TDateTime;
+begin
+  // resolve the object store (handles a submodule's ".git" gitdir-file too)
+  r := GitQuiet(['rev-parse', '--git-dir']);
+  if not r.Ok then Exit;
+  gitDir := Trim(r.StdOut);
+  if gitDir = '' then Exit;
+  if not PathIsAbsolute(gitDir) then
+    gitDir := IncludeTrailingPathDelimiter(FWorkDir) + gitDir;
+  packDir := IncludeTrailingPathDelimiter(gitDir) + 'objects' + PathDelim + 'pack';
+  if not DirectoryExists(packDir) then Exit;
+  if FindFirst(IncludeTrailingPathDelimiter(packDir) + 'tmp_pack_*',
+    faAnyFile, sr) <> 0 then Exit;
+  try
+    repeat
+      if (sr.Attr and faDirectory) <> 0 then Continue;
+      full := IncludeTrailingPathDelimiter(packDir) + sr.Name;
+      // leave anything still being written (recent mtime -> possibly in flight)
+      if FileAge(full, ft) and ((Now - ft) * SecsPerDay < AMinAgeSec) then Continue;
+      if DeleteFile(full) and Assigned(Log) then
+        Log.Info('git', 'pruned stale partial pack: ' + sr.Name);
+    until FindNext(sr) <> 0;
+  finally
+    FindClose(sr);
+  end;
 end;
 
 function TGitRunner.Fetch: TGitResult;
 begin
+  // sweep partial packs left by any previously-killed fetch so they can't pile
+  // up into gigabytes of .git garbage over many failed cycles
+  PrunePartialPacks;
   // never recurse into submodules: GotBox syncs each submodule independently
   // (ignore=all), and a broken/inaccessible submodule must not fail the root's
   // fetch (git's default on-demand recursion would abort the whole fetch).
   // --tags so user checkpoint tags created on another machine arrive here.
-  Result := Run(['fetch', '--prune', '--tags', '--no-recurse-submodules',
-    'origin'], GIT_NET_TIMEOUT_MS);
+  // --progress keeps the stall cap fed during a large download (see Clone).
+  Result := Run(['fetch', '--progress', '--prune', '--tags',
+    '--no-recurse-submodules', 'origin'], GIT_NET_TIMEOUT_MS);
 end;
 
 function TGitRunner.PullRebase: TGitResult;
 begin
-  Result := Run(['pull', '--rebase', 'origin'], GIT_NET_TIMEOUT_MS);
+  Result := Run(['pull', '--progress', '--rebase', 'origin'], GIT_NET_TIMEOUT_MS);
 end;
 
 function TGitRunner.Merge(const ARef: string): TGitResult;
