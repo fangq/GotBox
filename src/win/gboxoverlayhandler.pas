@@ -127,8 +127,7 @@ type
   end;
 
 function GetModuleHandleExW(dwFlags: DWORD; lpModuleName: PWideChar;
-  var phModule: HMODULE): BOOL; stdcall; external 'kernel32'
-  name 'GetModuleHandleExW';
+  var phModule: HMODULE): BOOL; stdcall; external 'kernel32' name 'GetModuleHandleExW';
 
 var
   gObjCount: LongInt = 0;
@@ -171,8 +170,7 @@ begin
   inherited Destroy;
 end;
 
-function TOverlayHandler.QueryInterface(constref iid: TGUID; out obj): LongInt;
-  stdcall;
+function TOverlayHandler.QueryInterface(constref iid: TGUID; out obj): LongInt; stdcall;
 begin
   if SameGuid(iid, IID_IUnknown) or
     SameGuid(iid, IID_IShellIconOverlayIdentifier) then
@@ -194,8 +192,8 @@ begin
   if Result = 0 then Destroy;
 end;
 
-function TOverlayHandler.GetOverlayInfo(pwszIconFile: PWideChar; cchMax: Integer;
-  out pIndex: Integer; out pdwFlags: DWORD): HRESULT; stdcall;
+function TOverlayHandler.GetOverlayInfo(pwszIconFile: PWideChar;
+  cchMax: Integer; out pIndex: Integer; out pdwFlags: DWORD): HRESULT; stdcall;
 var
   w: WideString;
 begin
@@ -238,8 +236,7 @@ begin
   FIconIndex := AIconIndex;
 end;
 
-function TOverlayFactory.QueryInterface(constref iid: TGUID; out obj): LongInt;
-  stdcall;
+function TOverlayFactory.QueryInterface(constref iid: TGUID; out obj): LongInt; stdcall;
 begin
   if SameGuid(iid, IID_IUnknown) or SameGuid(iid, IID_IClassFactory) then
   begin
@@ -276,7 +273,8 @@ end;
 function TOverlayFactory.LockServer(fLock: LongBool): HRESULT; stdcall;
 begin
   if fLock then InterlockedIncrement(gLockCount)
-  else InterlockedDecrement(gLockCount);
+  else
+    InterlockedDecrement(gLockCount);
   Result := S_OK;
 end;
 
@@ -289,7 +287,10 @@ var
   f: TOverlayFactory;
 begin
   Pointer(ppv) := nil;
-  if SameGuid(rclsid, CLSID_Synced) then begin st := fsSynced; idx := 0; end
+  if SameGuid(rclsid, CLSID_Synced) then begin
+    st := fsSynced;
+    idx := 0;
+  end
   else if SameGuid(rclsid, CLSID_Modified) then
   begin
     st := fsModified;
@@ -311,7 +312,8 @@ end;
 function HandlerCanUnloadNow: HRESULT;
 begin
   if (gObjCount = 0) and (gLockCount = 0) then Result := S_OK
-  else Result := S_FALSE;
+  else
+    Result := S_FALSE;
 end;
 
 { ---- (un)registration (HKLM/HKCR; requires elevation) ---- }
@@ -324,8 +326,8 @@ begin
   Result := False;
   if RegCreateKeyExA(root, PChar(subkey), 0, nil, REG_OPTION_NON_VOLATILE,
     KEY_WRITE, nil, k, @disp) <> ERROR_SUCCESS then Exit;
-  Result := RegSetValueExA(k, PChar(valname), 0, REG_SZ,
-    PByte(PChar(data)), Length(data) + 1) = ERROR_SUCCESS;
+  Result := RegSetValueExA(k, PChar(valname), 0, REG_SZ, PByte(PChar(data)),
+    Length(data) + 1) = ERROR_SUCCESS;
   RegCloseKey(k);
 end;
 
@@ -337,8 +339,7 @@ begin
   self := string(GetSelfPathW);
   Result :=
     RegSetSz(HKEY_CLASSES_ROOT, 'CLSID\' + clsidStr, '', AFriendly) and
-    RegSetSz(HKEY_CLASSES_ROOT, 'CLSID\' + clsidStr + '\InprocServer32', '',
-    self) and
+    RegSetSz(HKEY_CLASSES_ROOT, 'CLSID\' + clsidStr + '\InprocServer32', '', self) and
     RegSetSz(HKEY_CLASSES_ROOT, 'CLSID\' + clsidStr + '\InprocServer32',
     'ThreadingModel', 'Apartment') and
     // leading spaces raise our alphabetical priority against the ~15-slot limit
