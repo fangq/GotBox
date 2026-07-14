@@ -1491,7 +1491,7 @@ var
   lbl: TLabel;
   mem: TMemo;
   btn: TButton;
-  i, best, bestW, big, bigW: Integer;
+  pic: TPortableNetworkGraphic;
 begin
   f := TForm.CreateNew(nil);
   try
@@ -1506,34 +1506,25 @@ begin
     img.SetBounds(24, 20, 64, 64);
     img.Stretch := True;
     img.Proportional := True;
-    if Assigned(Application.Icon) and not Application.Icon.Empty then
+    // Use the runtime-drawn brand box (the same green icon the tray uses), NOT
+    // Application.Icon: some LCL/gtk2 builds mis-parse our embedded .ico when it
+    // is drawn in a TImage (the box fills with garbled colour stripes), while the
+    // natively-built TIcon renders correctly. Fall back to the app icon only if
+    // the runtime icons somehow weren't built.
+    if Assigned(FIcons[rsSynced]) then
     begin
+      // via a PNG (TImage's most reliable path) to avoid any TIcon alpha/stretch
+      // quirk on top of dodging the mis-parsed .ico
+      pic := TPortableNetworkGraphic.Create;
+      try
+        pic.Assign(FIcons[rsSynced]);
+        img.Picture.Assign(pic);
+      finally
+        pic.Free;
+      end;
+    end
+    else if Assigned(Application.Icon) and not Application.Icon.Empty then
       img.Picture.Icon.Assign(Application.Icon);
-      // Application.Icon's current frame is the tiny window/taskbar size; pick a
-      // high-res frame instead (the largest up to 128px) so the icon is crisp
-      // in this box rather than a small frame stretched up.
-      best := -1;
-      bestW := -1;
-      big := 0;
-      bigW := -1;
-      with img.Picture.Icon do
-        for i := 0 to Count - 1 do
-        begin
-          Current := i;
-          if Width > bigW then
-          begin
-            bigW := Width;
-            big := i;
-          end;
-          if (Width <= 128) and (Width > bestW) then
-          begin
-            bestW := Width;
-            best := i;
-          end;
-        end;
-      if best < 0 then best := big;   // no frame <=128: fall back to the largest
-      img.Picture.Icon.Current := best;
-    end;
 
     lbl := TLabel.Create(f);         // title
     lbl.Parent := f;
