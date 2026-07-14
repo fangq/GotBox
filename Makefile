@@ -13,7 +13,9 @@
 #   make clean      - remove build artifacts
 #   make distclean  - also remove binaries
 #   make icon       - (re)generate assets/gotbox.ico from tools/make-icon.py
-#   make install    - install binary + .desktop + hicolor icons (PREFIX=~/.local)
+#   make install    - install prebuilt binary + .desktop + icons (does NOT rebuild)
+#                     user:   make && make install                  (~/.local, no sudo)
+#                     system: make && sudo make install PREFIX=/usr/local
 #   make uninstall  - remove the installed files
 #   make autostart  - start GotBox on login (drops a .desktop in ~/.config/autostart)
 #
@@ -145,9 +147,24 @@ run: build
 # Install the binary, a .desktop entry, and the hicolor icons so the app shows
 # up in the menu with the GotBox icon and StatusNotifier panels resolve it by
 # name (Icon=gotbox) instead of a generic fallback. PREFIX defaults to ~/.local.
-install: build gotboxd icon
+# Copy the already-built files -- does NOT recompile (so it's safe under sudo).
+# Build first as your normal user, then install:
+#   make && make install                        # into ~/.local  (no sudo)
+#   make && sudo make install PREFIX=/usr/local  # system-wide
+install:
+	@test -x "$(BIN)" || { \
+	  echo "GotBox isn't built yet. Build first as your normal user (not root):"; \
+	  echo "    make"; \
+	  echo "then:"; \
+	  echo "    make install                         # into ~/.local (no sudo)"; \
+	  echo "    make gotboxd && sudo make install PREFIX=/usr/local   # system-wide"; \
+	  exit 1; }
 	install -Dm755 $(BIN) $(PREFIX)/bin/$(BIN)
-	install -Dm755 gotboxd $(PREFIX)/bin/gotboxd
+	@if [ -x gotboxd ]; then \
+	  install -Dm755 gotboxd $(PREFIX)/bin/gotboxd; \
+	else \
+	  echo "(gotboxd not built -- run 'make gotboxd' for the headless server daemon; skipping)"; \
+	fi
 	install -Dm644 packaging/linux/gotbox.desktop $(PREFIX)/share/applications/gotbox.desktop
 	@for s in $(ICONSIZES); do \
 	  install -Dm644 assets/icons/$${s}x$${s}/gotbox.png \
