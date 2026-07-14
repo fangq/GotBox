@@ -318,7 +318,7 @@ Key options (defaults in brackets):
 | **Machine name** | Identifies this computer in commit messages / conflict files. [hostname] |
 | **History cap** | Keep about this many recent commits per repo (20–50). [30] |
 | **Commit debounce** | Wait this long (ms) of quiet after the last save before committing (batches a burst of saves into one commit). [10000] |
-| **Pull interval** | How often (s) to pull remote changes. [60] |
+| **Pull interval** | How often (s) to check for remote changes. A cheap `ls-remote` check runs each interval; a full fetch/merge only when the remote actually moved. [15] |
 | **GC every N commits** | Run git maintenance after this many commits. [25] |
 | **LFS threshold (MB)** | Auto-track files at/above this size with Git LFS; `0` disables. [95] |
 | **Ignore patterns** | Globs never synced. [`.git`, `*.tmp`, `*~`] |

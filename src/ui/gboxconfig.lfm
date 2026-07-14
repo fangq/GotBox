@@ -129,9 +129,9 @@ object ConfigForm: TConfigForm
     Top = 316
     Width = 100
     MaxValue = 86400
-    MinValue = 10
+    MinValue = 5
     TabOrder = 7
-    Value = 60
+    Value = 15
   end
   object lblGc: TLabel
     Left = 20

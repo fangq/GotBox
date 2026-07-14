@@ -165,7 +165,7 @@ begin
     MachineName := 'machine';
   HistoryCap := 30;
   CommitDebounceMs := 10000;   // batch a burst of saves into one commit (10 s quiet)
-  PullIntervalSec := 60;
+  PullIntervalSec := 15;   // cheap: a light ls-remote check gates the full pull
   GcEveryNCommits := 25;
   // default just under GitHub's 100 MB hard push limit, so LFS only engages for
   // files plain git would otherwise reject (keeps LFS quota use minimal)

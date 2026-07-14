@@ -68,12 +68,15 @@ type
     FForce: Boolean;
     FLastChange: TDateTime;
     FLastCycle: TDateTime;
+    FLastFull: TDateTime;         // last time a full sync cycle actually ran
+    FSyncedRemoteSha: string;     // origin/main tip as of our last in-sync cycle
     FCommitsSinceGc: Integer;
     FOnNotice: TSyncNoticeEvent;
     FOnReposChanged: TReposChangedEvent;
     FOnCycleDone: TCycleDoneEvent;
     procedure OnWatchChange(Sender: TObject);
     procedure BuildNotice(AFiles: TStrings; out ATitle, ABody: string);
+    function RemoteAdvanced: Boolean;
     procedure DoSyncCycle;
   protected
     procedure Execute; override;
@@ -188,6 +191,36 @@ begin
   Terminate;
 end;
 
+{ Cheap remote-tip probe for the periodic sync-down: a single `ls-remote` round
+  trip (no fetch/transfer). True -> run a full cycle: the remote branch moved
+  since our last in-sync cycle, we've never synced, or the probe failed
+  (offline/unknown -- let the full cycle resolve it). False -> nothing changed,
+  skip the full cycle. Lets short pull intervals stay cheap. }
+function TRepoWorker.RemoteAdvanced: Boolean;
+var
+  git: TGitRunner;
+  r: TGitResult;
+  sha: string;
+  p: Integer;
+begin
+  if FSyncedRemoteSha = '' then Exit(True);   // never synced -> full cycle
+  git := TGitRunner.Create(FLocalPath);
+  try
+    git.AuthUser := FUser;
+    git.AuthToken := FToken;
+    git.DefaultTimeoutMs := GIT_DEFAULT_TIMEOUT_MS;
+    r := git.GitQuiet(['ls-remote', 'origin', 'refs/heads/main']);
+    if not r.Ok then Exit(True);               // can't tell -> full cycle
+    sha := Trim(r.StdOut);
+    p := Pos(#9, sha);                          // "<sha>\trefs/heads/main"
+    if p > 1 then sha := Copy(sha, 1, p - 1);
+    if sha = '' then Exit(True);               // no remote branch yet -> full cycle
+    Result := (sha <> FSyncedRemoteSha);
+  finally
+    git.Free;
+  end;
+end;
+
 procedure TRepoWorker.DoSyncCycle;
 const
   TRAY_SYNC_MIN_MS = 450;   // keep "syncing" visible even for an instant cycle
@@ -212,6 +245,7 @@ begin
 
   if Assigned(FStatus) then FStatus.SetState(FName, rsSyncing, '');
   syncStart := Now;
+  FLastFull := Now;   // a full cycle is running now (paces the periodic safety net)
   conflicts := TStringList.Create;
   changed := TStringList.Create;
   git := TGitRunner.Create(FLocalPath);
@@ -308,6 +342,16 @@ begin
       end;
     end;
 
+    // Remember the remote tip while we're fully in sync, so the periodic
+    // ls-remote fast-check (RemoteAdvanced) can skip the full cycle when nothing
+    // has changed remotely. Clear it on failure so the next check runs a full
+    // cycle (retries the push/fetch).
+    if outcome in [soUpToDate, soPushed, soPulled, soMerged, soReset, soConflict] then
+      FSyncedRemoteSha :=
+        Copy(Trim(git.GitQuiet(['rev-parse', 'origin/main']).StdOut), 1, 64)
+    else
+      FSyncedRemoteSha := '';
+
     // a pull into the root may have added/removed submodules (.gitmodules
     // changed elsewhere) -- let the engine re-scan and reconcile its workers
     if (FName = GOTBOX_REPO) and (outcome in [soPulled, soMerged, soReset]) and
@@ -348,8 +392,10 @@ begin
 end;
 
 procedure TRepoWorker.Execute;
+const
+  PERIODIC_FULL_MS = 300000;   // force a full cycle at least every 5 min anyway
 var
-  due: Boolean;
+  due, active, periodic: Boolean;
 begin
   FWatcher.Start;
   try
@@ -358,25 +404,39 @@ begin
     RequestSync;
     while not Terminated do
     begin
-      due := False;
+      active := False;     // "sync now" or a debounced local change -> full cycle
+      periodic := False;   // periodic sync-down -> gated by the cheap fast-check
       FLock.Enter;
       try
         if FForce then
         begin
           FForce := False;
           FDirty := False;
-          due := True;
+          active := True;
         end
         else if FDirty and (MilliSecondsBetween(Now, FLastChange) >= FDebounceMs) then
         begin
           FDirty := False;
-          due := True;
+          active := True;
         end
         else if (FPullIntervalMs > 0) and
           (MilliSecondsBetween(Now, FLastCycle) >= FPullIntervalMs) then
-          due := True;   // periodic sync-down
+          periodic := True;
       finally
         FLock.Leave;
+      end;
+
+      due := active;
+      if periodic then
+      begin
+        FLastCycle := Now;   // consume the periodic timer even when we skip below
+        // Run a full cycle at least every PERIODIC_FULL_MS (refreshes state and
+        // catches a change the watcher missed); otherwise only when the remote
+        // actually advanced -- a cheap ls-remote probe -- so a short pull interval
+        // doesn't fetch/spawn git every tick while nothing has changed.
+        if (MilliSecondsBetween(Now, FLastFull) >= PERIODIC_FULL_MS) or
+          RemoteAdvanced then
+          due := True;
       end;
 
       if due then
