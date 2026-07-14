@@ -33,7 +33,8 @@ STATES = {"idle": (149, 165, 166), "synced": (39, 158, 95),
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(ROOT, "assets")
 MASTER = 1024            # render big, then downscale with LANCZOS for crispness
-MARGIN = 0.09            # inset so the G stroke isn't clipped at the edges
+MARGIN = 0.04            # small inset so the box fills the panel slot (the thinned
+#                          G stroke's round caps still clear the edge)
 
 # Normalized isometric-cube vertices, lifted from the assets/icons/gbox.svg
 # mockup. The three faces are shaded from the brand green; the "G" is traced
@@ -62,7 +63,7 @@ def render(n, body=BODY):
     d.polygon([P(k) for k in BODYPTS], fill=body)
 
     # the constant light "G" traced along the box edges (round joins/caps)
-    ew = max(2, int(n * 0.11))
+    ew = max(2, int(n * 0.08))
     for a, b in GEDGES:
         d.line([P(a), P(b)], fill=GCOL, width=ew, joint="curve")
     r = ew * 0.5

@@ -525,7 +525,8 @@ procedure TMainForm.BuildIcons;
     SZ = 48;                    // render at 2x so the panel scales DOWN (crisp);
     // a 24px source gets upscaled to panel height and
     // the thin G blurs into a solid block
-    MG = 0.09;                  // margin so the G stroke isn't clipped
+    MG = 0.04;                  // small margin so the box fills the panel slot
+    // (just enough that the thinned G stroke's round caps aren't clipped)
     KEY = TColor($00FE00FE);     // transparent colour-key (not used by any face)
     GCOL = TColor($00EDEDED);    // constant light "G" (#ededed)
   var
@@ -553,7 +554,7 @@ procedure TMainForm.BuildIcons;
     ll := Q(0.0, 0.75);
     lr := Q(1.0, 0.75);
     bot := Q(0.5, 1.0);
-    gw := SZ div 8;
+    gw := SZ div 12;   // thinner G so a smaller margin still clears its caps
     if gw < 2 then gw := 2;
 
     bmp := TBitmap.Create;
