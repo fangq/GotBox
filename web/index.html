@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="indigo">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GotBox — Cross-machine file sync backed by your own GitHub</title>
+<meta name="description" content="GotBox keeps a folder in sync across your computers using private GitHub repos you own. No proprietary cloud, no subscription. Lives in the system tray.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ── theme palettes ──────────────────────────────────────────────
+   Each theme sets the neumorphic base (--bg + the two soft shadows),
+   an accent, the raised inner-face gradient, and text tones. */
+:root, [data-theme="indigo"] {
+  --bg:#e2e4ee; --sd:#b9bcca; --sl:#908fa8;
+  --accent:#5a67d8; --accent2:#4c5bd4;
+  --face1:#d2d5e2; --face2:#f1f3fc;
+  --heading:#2d3748; --text:#4a5568; --muted:#64748b; --divider:#d1d3e0;
+}
+[data-theme="dark"] {
+  --bg:#2a2e35; --sd:#1d2026; --sl:#363b44;
+  --accent:#34d399; --accent2:#10b981;
+  --face1:#262a30; --face2:#333842;
+  --heading:#f1f5f9; --text:#cbd5e1; --muted:#94a3b8; --divider:#3a4049;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; scroll-behavior: smooth; transition: background 0.35s, color 0.35s; }
+a { color: unset; text-decoration: none; }
+
+/* neumorphic navbar */
+.navbar { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 1000; padding: 10px 22px; display: flex; align-items: center; gap: 22px; background: var(--bg); box-shadow: 6px 6px 12px var(--sd), -6px -6px 12px var(--sl); border-radius: 50px; max-width: calc(100vw - 32px); }
+.nav-logo { font-size: 1.25rem; font-weight: 700; color: var(--accent); display: flex; align-items: center; gap: 8px; }
+.nav-logo svg { width: 26px; height: 26px; }
+.nav-links { display: flex; gap: 4px; }
+.nav-links a { color: var(--muted); font-size: 0.85rem; font-weight: 500; padding: 9px 14px; border-radius: 25px; transition: all 0.25s; cursor: pointer; }
+.nav-links a:hover { box-shadow: inset 2px 2px 4px var(--sd), inset -2px -2px 4px var(--sl); color: var(--accent); }
+
+/* theme swatch picker */
+.theme-switch { display: flex; gap: 8px; align-items: center; padding-left: 4px; border-left: 1px solid var(--divider); }
+.swatch { width: 20px; height: 20px; border-radius: 50%; border: none; cursor: pointer; padding: 0; box-shadow: 2px 2px 4px var(--sd), -2px -2px 4px var(--sl); transition: transform 0.2s; }
+.swatch:hover { transform: scale(1.15); }
+.swatch.active { box-shadow: inset 2px 2px 4px rgba(0,0,0,0.35); outline: 2px solid var(--sl); outline-offset: 1px; }
+
+.container { max-width: 1100px; margin: 0 auto; padding: 110px 24px 40px; }
+
+.hero { text-align: center; padding: 56px 40px; margin-bottom: 44px; background: var(--bg); box-shadow: 12px 12px 24px var(--sd), -12px -12px 24px var(--sl); border-radius: 32px; }
+.hero-icon { width: 96px; height: 96px; margin: 0 auto 24px; display: flex; align-items: center; justify-content: center; background: linear-gradient(145deg, var(--face1), var(--face2)); box-shadow: 8px 8px 16px var(--sd), -8px -8px 16px var(--sl); border-radius: 26px; }
+.hero-icon svg { width: 56px; height: 56px; }
+.hero h1 { font-size: 2.9rem; font-weight: 700; color: var(--heading); margin-bottom: 12px; letter-spacing: -0.5px; }
+.hero h1 span { color: var(--accent); }
+.hero-sub { font-size: 1.12rem; color: var(--muted); margin: 0 auto 30px; max-width: 640px; line-height: 1.6; }
+.hero-sub strong { color: var(--text); }
+.chip-row { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; margin-bottom: 28px; }
+.chip { padding: 9px 18px; font-size: 0.82rem; font-weight: 500; color: var(--text); background: var(--bg); box-shadow: 4px 4px 8px var(--sd), -4px -4px 8px var(--sl); border-radius: 25px; }
+.lang-dots { display: flex; justify-content: center; gap: 24px; margin-bottom: 30px; flex-wrap: wrap; }
+.lang-dot { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; color: var(--text); }
+.lang-dot span { width: 12px; height: 12px; border-radius: 50%; box-shadow: 2px 2px 4px var(--sd), -2px -2px 4px var(--sl); }
+.lang-dot span.linux { background: #f0932b; }
+.lang-dot span.win { background: #0078d4; }
+.lang-dot span.mac { background: #9aa2ab; }
+
+.btn-row { display: flex; justify-content: center; gap: 16px; flex-wrap: wrap; }
+/* parallelogram buttons: skew the shape, un-skew the label */
+.btn { padding: 14px 34px; font-size: 0.9rem; font-weight: 600; border: none; cursor: pointer; border-radius: 8px; transform: skewX(-12deg); transition: transform 0.2s, box-shadow 0.2s; display: inline-flex; }
+.btn-inner { display: inline-flex; align-items: center; gap: 8px; transform: skewX(12deg); }
+.btn:hover { transform: skewX(-12deg) translateY(-2px); }
+.btn:active { transform: skewX(-12deg) translateY(1px); }
+.btn-primary { color: white; background: linear-gradient(145deg, var(--accent), var(--accent2)); box-shadow: 6px 6px 12px var(--sd), -6px -6px 12px var(--sl); }
+.btn-secondary { color: var(--accent); background: var(--bg); box-shadow: 6px 6px 12px var(--sd), -6px -6px 12px var(--sl); }
+.btn svg { width: 18px; height: 18px; }
+
+.section { margin-bottom: 44px; }
+.section-title { font-size: 1.5rem; font-weight: 600; color: var(--heading); margin-bottom: 24px; display: flex; align-items: center; gap: 12px; }
+.section-title::before { content: ''; width: 6px; height: 28px; background: var(--accent); border-radius: 3px; }
+.section-lead { color: var(--muted); font-size: 0.9rem; margin: -8px 0 22px; }
+
+.feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+.feature-card { padding: 28px; background: var(--bg); box-shadow: 8px 8px 16px var(--sd), -8px -8px 16px var(--sl); border-radius: 24px; transition: transform 0.3s; }
+.feature-card:hover { transform: translateY(-4px); }
+.feature-icon { width: 52px; height: 52px; margin-bottom: 16px; display: flex; align-items: center; justify-content: center; background: linear-gradient(145deg, var(--face1), var(--face2)); box-shadow: 4px 4px 8px var(--sd), -4px -4px 8px var(--sl); border-radius: 16px; font-size: 24px; }
+.feature-card h3 { font-size: 1.02rem; font-weight: 600; color: var(--heading); margin-bottom: 8px; }
+.feature-card p { font-size: 0.86rem; color: var(--muted); line-height: 1.6; }
+
+.steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+.step { padding: 24px; text-align: center; background: var(--bg); box-shadow: 8px 8px 16px var(--sd), -8px -8px 16px var(--sl); border-radius: 22px; }
+.step-num { width: 44px; height: 44px; margin: 0 auto 14px; display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--accent); background: linear-gradient(145deg, var(--face1), var(--face2)); box-shadow: 4px 4px 8px var(--sd), -4px -4px 8px var(--sl); border-radius: 14px; }
+.step h4 { font-size: 0.98rem; font-weight: 600; color: var(--heading); margin-bottom: 6px; }
+.step p { font-size: 0.82rem; color: var(--muted); line-height: 1.55; }
+
+.state-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.state-card { padding: 22px 24px; display: flex; align-items: center; gap: 18px; background: var(--bg); box-shadow: 8px 8px 16px var(--sd), -8px -8px 16px var(--sl); border-radius: 22px; }
+.state-card .glyph { width: 46px; height: 46px; flex-shrink: 0; }
+.state-card h4 { font-size: 0.98rem; font-weight: 600; color: var(--heading); margin-bottom: 3px; }
+.state-card p { font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
+
+.install-card { padding: 12px 32px; background: var(--bg); box-shadow: 8px 8px 16px var(--sd), -8px -8px 16px var(--sl); border-radius: 24px; }
+.install-step { display: flex; gap: 20px; padding: 22px 0; border-bottom: 1px solid var(--divider); }
+.install-step:last-child { border-bottom: none; }
+.istep-num { width: 40px; height: 40px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-weight: 600; color: var(--accent); background: linear-gradient(145deg, var(--face1), var(--face2)); box-shadow: 4px 4px 8px var(--sd), -4px -4px 8px var(--sl); border-radius: 12px; }
+.istep h4 { font-size: 1rem; font-weight: 600; color: var(--heading); margin-bottom: 4px; }
+.istep p { font-size: 0.88rem; color: var(--muted); line-height: 1.6; }
+code { font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; color: var(--heading); background: var(--bg); padding: 3px 10px; border-radius: 8px; box-shadow: inset 2px 2px 4px var(--sd), inset -2px -2px 4px var(--sl); }
+pre { font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; line-height: 1.85; color: var(--heading); background: var(--bg); box-shadow: inset 4px 4px 8px var(--sd), inset -4px -4px 8px var(--sl); padding: 22px 24px; border-radius: 16px; overflow-x: auto; margin-top: 16px; }
+pre .cmt { color: var(--muted); }
+pre .grn { color: var(--accent); }
+
+.config-card { padding: 12px 28px; background: var(--bg); box-shadow: 8px 8px 16px var(--sd), -8px -8px 16px var(--sl); border-radius: 24px; overflow-x: auto; }
+table.cfg { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+table.cfg th { text-align: left; padding: 14px 12px; color: var(--heading); font-weight: 600; border-bottom: 2px solid var(--accent); }
+table.cfg td { padding: 12px; color: var(--muted); border-bottom: 1px solid var(--divider); vertical-align: top; }
+table.cfg td:first-child { color: var(--heading); font-weight: 600; white-space: nowrap; }
+table.cfg tr:last-child td { border-bottom: none; }
+table.cfg .def { font-family: 'JetBrains Mono', monospace; color: var(--accent); font-weight: 500; }
+
+.note { background: var(--bg); box-shadow: inset 3px 3px 6px var(--sd), inset -3px -3px 6px var(--sl); border-left: 4px solid var(--accent); padding: 14px 18px; border-radius: 0 12px 12px 0; margin-top: 20px; font-size: 0.86rem; color: var(--text); }
+.note strong { color: var(--accent); }
+
+.footer { text-align: center; padding: 40px 24px 60px; color: var(--muted); font-size: 0.88rem; }
+.footer a { color: var(--accent); font-weight: 500; }
+.footer .sep { margin: 0 8px; color: var(--sd); }
+
+@media (max-width: 900px) {
+  .feature-grid, .steps, .state-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 640px) {
+  .nav-links { display: none; }
+  .hero { padding: 40px 22px; }
+  .hero h1 { font-size: 2.1rem; }
+  .feature-grid, .steps, .state-grid { grid-template-columns: 1fr; }
+  .container { padding-top: 92px; }
+}
+</style>
+</head>
+<body>
+
+<nav class="navbar">
+  <a href="#top" class="nav-logo"><span id="navicon"></span>GotBox</a>
+  <div class="nav-links">
+    <a href="#how">How it works</a>
+    <a href="#features">Features</a>
+    <a href="#states">Tray states</a>
+    <a href="#start">Get started</a>
+    <a href="#config">Config</a>
+  </div>
+  <div class="theme-switch" id="themeSwitch"></div>
+</nav>
+
+<div class="container" id="top">
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="hero-icon"><span id="heroicon"></span></div>
+    <h1><span>Got</span>Box</h1>
+    <p class="hero-sub">Cross-machine file sync backed by <strong>your own GitHub account</strong>.
+      Edit a file and it's automatically committed, versioned, and pushed to a
+      private repo you own — changes from your other machines flow back on their own.
+      No proprietary cloud, no subscription, no file-size surprises.</p>
+    <div class="chip-row">
+      <span class="chip">Automatic two-way sync</span>
+      <span class="chip">Private git repos you own</span>
+      <span class="chip">Never loses data on conflicts</span>
+      <span class="chip">Lives in the system tray</span>
+    </div>
+    <div class="lang-dots">
+      <div class="lang-dot"><span class="linux"></span> Linux</div>
+      <div class="lang-dot"><span class="win"></span> Windows</div>
+      <div class="lang-dot"><span class="mac"></span> macOS</div>
+    </div>
+    <div class="btn-row">
+      <a href="#start" class="btn btn-primary"><span class="btn-inner">Get Started</span></a>
+      <a href="https://github.com/fangq/GotBox" class="btn btn-secondary" target="_blank" rel="noopener"><span class="btn-inner">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.2 11.39.6.11.82-.26.82-.58v-2.03c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.34-5.47-5.95 0-1.31.47-2.39 1.24-3.23-.13-.31-.54-1.53.11-3.19 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.65 1.66.24 2.88.12 3.19.77.84 1.23 1.92 1.23 3.23 0 4.62-2.81 5.64-5.49 5.94.43.37.82 1.1.82 2.22v3.29c0 .32.22.7.83.58A12.01 12.01 0 0 0 24 12.5C24 5.87 18.63.5 12 .5z"/></svg>
+        GitHub</span></a>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section class="section" id="how">
+    <h2 class="section-title">How it works</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h4>Pick a sync folder</h4>
+        <p>Choose one root folder (default <code>~/GotBox</code>). It becomes the working copy of a private <code>.gotbox</code> repo.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h4>Just edit files</h4>
+        <p>GotBox watches for changes, batches a burst of saves, then commits &amp; pushes automatically in the background.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h4>Other machines pull</h4>
+        <p>Sign in with the same account elsewhere; a cheap remote check pulls new commits as soon as they appear.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <h4>Stays lean forever</h4>
+        <p>History is capped by a rolling squash and git maintenance runs on its own, so repos never grow without bound.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section class="section" id="features">
+    <h2 class="section-title">Features</h2>
+    <div class="feature-grid">
+      <div class="feature-card"><div class="feature-icon">🔄</div><h3>Automatic two-way sync</h3><p>Local edits are committed and pushed; remote changes are pulled and merged — all silently in the background.</p></div>
+      <div class="feature-card"><div class="feature-icon">🔒</div><h3>Backed by private git</h3><p>Your files live in repos you own on GitHub (or a self-hosted git server). Full version history comes for free.</p></div>
+      <div class="feature-card"><div class="feature-icon">💻</div><h3>Multi-machine</h3><p>Set up the same account on another computer and your files appear there; edits propagate both ways.</p></div>
+      <div class="feature-card"><div class="feature-icon">🧩</div><h3>Link projects as submodules</h3><p>Keep distinct repos under one root, each with its own local folder name, each syncing independently.</p></div>
+      <div class="feature-card"><div class="feature-icon">🛟</div><h3>Never loses data</h3><p>If a file changed on two machines, GotBox keeps <em>both</em> versions and alerts you to resolve it.</p></div>
+      <div class="feature-card"><div class="feature-icon">📦</div><h3>Handles large files</h3><p>Files past a size threshold are auto-tracked with Git LFS, so they don't hit GitHub's 100 MB push limit.</p></div>
+      <div class="feature-card"><div class="feature-icon">🔑</div><h3>Secure credentials</h3><p>Your GitHub token lives only in the OS keychain (libsecret / Keychain / DPAPI) — never in a plain config file.</p></div>
+      <div class="feature-card"><div class="feature-icon">🔔</div><h3>Desktop notifications</h3><p>A quiet bubble tells you what synced — file names for a few, a count for many — and flags conflicts or errors.</p></div>
+      <div class="feature-card"><div class="feature-icon">🏷️</div><h3>File-manager badges</h3><p><em>Windows &amp; macOS:</em> TortoiseGit-style overlays show per-file synced / modified / conflict status in Explorer &amp; Finder.</p></div>
+    </div>
+  </section>
+
+  <!-- TRAY STATES -->
+  <section class="section" id="states">
+    <h2 class="section-title">Tray icon states</h2>
+    <p class="section-lead">The tray icon is the GotBox "G-in-a-box", tinted to show the aggregate state of all your repos.</p>
+    <div class="state-grid">
+      <div class="state-card"><span class="glyph" data-state="synced"></span><div><h4>Synced</h4><p>Everything is committed, pushed, and up to date.</p></div></div>
+      <div class="state-card"><span class="glyph" data-state="syncing"></span><div><h4>Syncing</h4><p>Committing, pushing, or pulling changes right now.</p></div></div>
+      <div class="state-card"><span class="glyph" data-state="conflict"></span><div><h4>Conflict</h4><p>A file changed on two machines; both kept — open Status to resolve.</p></div></div>
+      <div class="state-card"><span class="glyph" data-state="error"></span><div><h4>Error</h4><p>A repo could not sync; open Status for details.</p></div></div>
+      <div class="state-card"><span class="glyph" data-state="idle"></span><div><h4>Idle / Paused</h4><p>Nothing to do, or syncing is paused.</p></div></div>
+      <div class="state-card"><span class="glyph" data-state="offline"></span><div><h4>Offline</h4><p>No network; changes are queued and sync resumes automatically.</p></div></div>
+    </div>
+  </section>
+
+  <!-- GET STARTED -->
+  <section class="section" id="start">
+    <h2 class="section-title">Get started</h2>
+    <div class="install-card">
+      <div class="install-step">
+        <div class="istep-num">1</div>
+        <div class="istep"><h4>Install</h4><p>Grab a prebuilt installer for your OS from the
+          <a href="https://github.com/fangq/GotBox/releases" style="color:var(--accent)" target="_blank" rel="noopener">Releases</a>
+          page — a <code>.deb</code> (Linux), setup <code>.exe</code> (Windows), or <code>.dmg</code> (macOS) — or build from source with Lazarus/FPC.</p></div>
+      </div>
+      <div class="install-step">
+        <div class="istep-num">2</div>
+        <div class="istep"><h4>Create a GitHub token</h4><p>Make a <strong>classic</strong> personal access token with the <code>repo</code> scope so GotBox can create and push to private repos. You paste it once — it's saved to your OS keychain.</p></div>
+      </div>
+      <div class="install-step">
+        <div class="istep-num">3</div>
+        <div class="istep"><h4>Sign in &amp; pick a folder</h4><p>On first launch, enter your GitHub username and token, then confirm the sync folder (defaults to <code>~/GotBox</code>). GotBox creates the private <code>.gotbox</code> repo automatically the first time content appears.</p></div>
+      </div>
+      <div class="install-step">
+        <div class="istep-num">4</div>
+        <div class="istep"><h4>Add a second machine</h4><p>Install GotBox on another computer, sign in with the <strong>same</strong> account, and point it at a folder. GotBox clones your existing <code>.gotbox</code> (and its linked submodules) and keeps everything in sync.</p></div>
+      </div>
+    </div>
+    <pre><span class="cmt"># build from source (needs Lazarus/FPC + git)</span>
+make            <span class="cmt"># build the tray app</span>
+make run        <span class="cmt"># build and launch</span>
+make install    <span class="cmt"># install binary + desktop entry + icons</span>
+make autostart  <span class="cmt"># also start GotBox on login</span></pre>
+  </section>
+
+  <!-- CONFIG -->
+  <section class="section" id="config">
+    <h2 class="section-title">Configuration</h2>
+    <div class="config-card">
+      <table class="cfg">
+        <thead><tr><th>Setting</th><th>Meaning</th><th>Default</th></tr></thead>
+        <tbody>
+          <tr><td>Root folder</td><td>The synced directory.</td><td class="def">~/GotBox</td></tr>
+          <tr><td>Backend</td><td><code>github</code> (HTTPS + token) or <code>git</code> (self-hosted over SSH).</td><td class="def">github</td></tr>
+          <tr><td>History cap</td><td>Keep about this many recent commits per repo (rolling squash trims older ones).</td><td class="def">30</td></tr>
+          <tr><td>Commit debounce</td><td>Quiet time (ms) after the last save before committing — batches a burst into one commit.</td><td class="def">10000</td></tr>
+          <tr><td>Pull interval</td><td>How often (s) to check the remote. A cheap <code>ls-remote</code> probe runs each interval; a full fetch only when the remote actually moved.</td><td class="def">15</td></tr>
+          <tr><td>Maintenance</td><td>Run git gc / repack after this many commits.</td><td class="def">25</td></tr>
+          <tr><td>LFS threshold</td><td>Auto-track files at/above this size (MB) with Git LFS; <code>0</code> disables.</td><td class="def">95</td></tr>
+          <tr><td>Ignore patterns</td><td>Globs never synced.</td><td class="def">.git, *.tmp, *~</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note"><strong>Your token is never stored in the config file</strong> — it lives only in the OS keychain, and is never written to disk when handed to git.</div>
+  </section>
+
+</div>
+
+<footer class="footer">
+  Created by <strong>Qianqian Fang</strong>
+  <span class="sep">·</span>
+  <a href="https://github.com/fangq/GotBox" target="_blank" rel="noopener">github.com/fangq/GotBox</a>
+  <span class="sep">·</span>
+  GPL-3.0-or-later
+</footer>
+
+<script>
+// ── the GotBox "G-in-a-box" glyph ────────────────────────────────
+// A flat isometric-box hexagon with a light "G" traced along its own
+// edges. Geometry mirrors tools/make-icon.py so the page icon matches
+// the tray / indicator icon. The tray-state glyphs use the real
+// per-status tray colours; the nav/hero icon follows the active theme.
+var STATE = {
+  idle:'#95a5a6', synced:'#279e5f', syncing:'#3498db',
+  conflict:'#f39c12', error:'#e74c3c', paused:'#95a5a6', offline:'#7f8c8d'
+};
+function pt(x, y) { var m = 1, s = 22; return (m + x * s).toFixed(1) + ',' + (m + y * s).toFixed(1); }
+var TOP = pt(0.5, 0), UL = pt(0, 0.25), UR = pt(1, 0.25), C = pt(0.5, 0.5),
+    LL = pt(0, 0.75), LR = pt(1, 0.75), BOT = pt(0.5, 1);
+var BODY = [TOP, UR, LR, BOT, LL, UL].join(' ');
+var GPATH = [TOP, UL, LL, BOT, LR, UR, C].join(' ');
+function gbox(color, px) {
+  return '<svg width="' + px + '" height="' + px + '" viewBox="0 0 24 24" style="display:block">' +
+    '<polygon points="' + BODY + '" fill="' + color + '"/>' +
+    '<polyline points="' + GPATH + '" fill="none" stroke="#ededed" stroke-width="2" ' +
+      'stroke-linejoin="round" stroke-linecap="round"/></svg>';
+}
+document.querySelectorAll('.glyph[data-state]').forEach(function (el) {
+  el.innerHTML = gbox(STATE[el.dataset.state], 46);
+});
+
+// ── theme picker ─────────────────────────────────────────────────
+var THEMES = [
+  { id:'indigo', name:'Indigo', accent:'#5a67d8' },
+  { id:'dark',   name:'Dark',   accent:'#34d399' }
+];
+var sw = document.getElementById('themeSwitch');
+function paintIcons() {
+  var accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  document.getElementById('navicon').innerHTML = gbox(accent, 26);
+  document.getElementById('heroicon').innerHTML = gbox(accent, 56);
+}
+function applyTheme(id) {
+  document.documentElement.setAttribute('data-theme', id);
+  try { localStorage.setItem('gotbox-theme', id); } catch (e) {}
+  sw.querySelectorAll('.swatch').forEach(function (b) {
+    b.classList.toggle('active', b.dataset.theme === id);
+  });
+  paintIcons();
+}
+THEMES.forEach(function (t) {
+  var b = document.createElement('button');
+  b.className = 'swatch';
+  b.dataset.theme = t.id;
+  b.style.background = t.accent;
+  b.title = t.name + ' theme';
+  b.setAttribute('aria-label', t.name + ' theme');
+  b.addEventListener('click', function () { applyTheme(t.id); });
+  sw.appendChild(b);
+});
+var saved = 'indigo';
+try { saved = localStorage.getItem('gotbox-theme') || 'indigo'; } catch (e) {}
+if (!THEMES.some(function (t) { return t.id === saved; })) saved = 'indigo';
+applyTheme(saved);
+</script>
+</body>
+</html>
