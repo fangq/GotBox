@@ -37,6 +37,7 @@ GotBoxFinder.appex/
 /tests/testworker
 /tests/testsync
 /tests/testrobust
+/tests/testrecover
 /tests/testfilestatus
 /tests/testoverlayipc
 /tests/testhistory

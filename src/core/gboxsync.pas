@@ -105,7 +105,9 @@ begin
     // "object file ... is empty"
     (Pos('bad object', s) > 0) or (Pos('unable to read tree', s) > 0) or
     (Pos('did not receive expected object', s) > 0) or
-    (Pos('object of unexpected type', s) > 0) or (Pos('sha1 mismatch', s) > 0);
+    (Pos('object of unexpected type', s) > 0) or (Pos('sha1 mismatch', s) > 0) or
+    (Pos('invalid sha1 pointer', s) > 0) or (Pos('missing blob', s) > 0) or
+    (Pos('missing tree', s) > 0) or (Pos('missing commit', s) > 0);
 end;
 
 const

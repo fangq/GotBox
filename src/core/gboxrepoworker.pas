@@ -29,7 +29,8 @@ interface
 
 uses
   Classes, SysUtils, DateUtils, SyncObjs,
-  gboxgitrunner, gboxfilewatcher, gboxstatusmodel, gboxsync, gboxhistory, gboxlfs;
+  gboxgitrunner, gboxfilewatcher, gboxstatusmodel, gboxsync, gboxhistory, gboxlfs,
+  gboxrecover;
 
 type
   { Fired (on the worker thread) after a cycle that synced files, with a ready-
@@ -266,7 +267,7 @@ var
   detail, td, ntitle, nbody, elc: string;
   conflicts, changed: TStringList;
   syncStart: TDateTime;
-  delayMs: Integer;
+  delayMs, k: Integer;
   contention: Boolean;
 begin
   // A submodule whose working folder the user deleted: stop syncing it rather
@@ -387,30 +388,53 @@ begin
         else
         begin
           Inc(FErrorStreak);
-          // A corrupt local object store won't heal by retrying: surface a clear,
-          // actionable state immediately (jump to "stuck") so the user knows to
-          // re-clone this folder, rather than spinning silently.
+          // A corrupt local object store won't heal by retrying. For an auto-sync
+          // repo, rebuild it from origin in place (preserving uncommitted edits as
+          // "(recovered ...)" copies); if that succeeds the repo is usable again,
+          // so clear the error and let the next cycle sync normally. If recovery
+          // can't run (offline / managed repo), surface a clear "re-clone" state.
           if IsCorruptionError(detail) then
           begin
-            detail := 'repository data is corrupted -- re-clone this folder to ' +
-              'recover (' + detail + ')';
-            if FErrorStreak < STUCK_AFTER then FErrorStreak := STUCK_AFTER;
-          end;
-          delayMs := BackoffDelayMs(FErrorStreak, BACKOFF_BASE_MS, BACKOFF_MAX_MS);
-          delayMs := delayMs + Random(delayMs div 5 + 1);   // +0..20% jitter
-          FBackoffUntil := IncMilliSecond(Now, delayMs);
-          if Assigned(FStatus) then
-            if FErrorStreak >= STUCK_AFTER then
-              FStatus.SetState(FName, rsError,
-                Format('%s (stuck after %d tries)', [detail, FErrorStreak]))
+            if FAutoSync and RecloneCorruptRepo(git, FBranch, FMachine, td, k) then
+            begin
+              if Assigned(Log) then Log.Info('worker', FName + ': ' + td);
+              if Assigned(FOnNotice) then
+                FOnNotice('GotBox - repaired ' + FName,
+                  'Rebuilt from the remote after local corruption; ' +
+                  IntToStr(k) + ' edited file(s) kept as "(recovered ...)" copies');
+              FErrorStreak := 0;
+              FBackoffUntil := 0;
+              FStuckNotified := False;
+              if Assigned(FStatus) then FStatus.SetState(FName, rsSynced, 'recovered');
+              detail := '';   // handled
+            end
             else
-              FStatus.SetState(FName, rsError, detail);
-          if Assigned(Log) then Log.Warn('worker', FName + ': ' + detail);
-          if (FErrorStreak = STUCK_AFTER) and (not FStuckNotified) then
+            begin
+              detail := 'repository data is corrupted -- re-clone this folder to ' +
+                'recover (' + detail + ')';
+              if FErrorStreak < STUCK_AFTER then FErrorStreak := STUCK_AFTER;
+            end;
+          end;
+          // detail cleared above means corruption was auto-recovered -- leave the
+          // "recovered" state as set and skip the backoff/error path entirely.
+          if detail <> '' then
           begin
-            if Assigned(FOnNotice) then
-              FOnNotice('GotBox - sync problem', FName + ': ' + detail);
-            FStuckNotified := True;
+            delayMs := BackoffDelayMs(FErrorStreak, BACKOFF_BASE_MS, BACKOFF_MAX_MS);
+            delayMs := delayMs + Random(delayMs div 5 + 1);   // +0..20% jitter
+            FBackoffUntil := IncMilliSecond(Now, delayMs);
+            if Assigned(FStatus) then
+              if FErrorStreak >= STUCK_AFTER then
+                FStatus.SetState(FName, rsError,
+                  Format('%s (stuck after %d tries)', [detail, FErrorStreak]))
+              else
+                FStatus.SetState(FName, rsError, detail);
+            if Assigned(Log) then Log.Warn('worker', FName + ': ' + detail);
+            if (FErrorStreak = STUCK_AFTER) and (not FStuckNotified) then
+            begin
+              if Assigned(FOnNotice) then
+                FOnNotice('GotBox - sync problem', FName + ': ' + detail);
+              FStuckNotified := True;
+            end;
           end;
         end;
       end;
