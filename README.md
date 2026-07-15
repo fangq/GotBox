@@ -362,6 +362,24 @@ gotbox --help     # list options
 
 On Windows the GUI is already console-detached, so `-d` is a no-op.
 
+### Headless (no tray): `gotboxd`
+
+`gotbox -d` is still the tray app, just detached. For machines with **no
+desktop / no tray at all** — a server, a headless box, or a login shell — use
+the separate **`gotboxd`** binary: it runs the full sync engine with no GUI and
+logs to the console (or a file), so it works over SSH and under systemd/init.
+
+```sh
+gotboxd                 # run the sync engine headless (foreground)
+gotboxd --takeover      # take over a root already claimed by another instance
+gotboxd --help          # list options
+```
+
+It reads the same config and credentials as the tray app, so set those up once
+(via the GUI, or the config file + keychain) and `gotboxd` picks them up. Since
+it can't prompt, it **refuses** to grab a root that another machine is actively
+managing unless you pass `--takeover` (the GUI, by contrast, asks).
+
 ---
 
 ## Troubleshooting
