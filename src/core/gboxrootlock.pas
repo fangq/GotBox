@@ -171,10 +171,17 @@ end;
 function WriteOwner(const ARoot, AMachine, AToken: string): Boolean;
 var
   sl: TStringList;
+  dest, tmp: string;
 begin
   Result := False;
   // no .git -> nothing to coordinate (root not set up yet)
   if not DirectoryExists(IncludeTrailingPathDelimiter(ARoot) + '.git') then Exit;
+  dest := RootLockPath(ARoot);
+  // write to a temp file then rename over the target, so a concurrent reader
+  // (ReadRootOwner) sees either the whole old file or the whole new one -- never
+  // a half-written lock (which parses as "no lock" and opens a two-owner race,
+  // an issue on a slow/shared network filesystem).
+  tmp := dest + '.' + IntToHex(Random($7FFFFFFF), 8) + '.tmp';
   sl := TStringList.Create;
   try
     sl.Add('machine=' + AMachine);
@@ -183,10 +190,18 @@ begin
     sl.Add('token=' + AToken);
     sl.Add('heartbeat=' + IntToStr(NowUnix));
     try
-      sl.SaveToFile(RootLockPath(ARoot));
-      Result := True;
+      sl.SaveToFile(tmp);
+      {$IFDEF WINDOWS}
+      // POSIX rename() replaces atomically; Win32 RenameFile fails if the target
+      // exists, so drop it first (a brief no-file gap is still better than a torn
+      // file, and the heartbeat/token model tolerates a missed read).
+      if FileExists(dest) then DeleteFile(dest);
+      {$ENDIF}
+      Result := RenameFile(tmp, dest);
+      if not Result then DeleteFile(tmp);   // clean up the temp on failure
     except
       Result := False;
+      DeleteFile(tmp);
     end;
   finally
     sl.Free;

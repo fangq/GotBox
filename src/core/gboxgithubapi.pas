@@ -62,7 +62,7 @@ uses
   {$ELSE}
   fpopenssl, openssl,
   {$ENDIF}
-  fpjson, jsonparser, gboxlog;
+  fpjson, jsonparser, DateUtils, gboxlog;
 
 const
   API_BASE = 'https://api.github.com';
@@ -73,12 +73,55 @@ begin
   FToken := AToken;
 end;
 
+{ Case-insensitive lookup of a response header value ("Name: Value" lines). }
+function HeaderValue(AHeaders: TStrings; const AName: string): string;
+var
+  i, c: Integer;
+  ln: string;
+begin
+  Result := '';
+  if AHeaders = nil then Exit;
+  for i := 0 to AHeaders.Count - 1 do
+  begin
+    ln := AHeaders[i];
+    c := Pos(':', ln);
+    if (c > 0) and SameText(Trim(Copy(ln, 1, c - 1)), AName) then
+      Exit(Trim(Copy(ln, c + 1, MaxInt)));
+  end;
+end;
+
+{ Seconds to wait if the client's last response was a GitHub rate-limit refusal
+  (0 = not rate-limited). Honors Retry-After (secondary limit) and, when the
+  primary quota is exhausted (X-RateLimit-Remaining: 0), X-RateLimit-Reset. }
+function RateLimitWaitSec(AClient: TFPHTTPClient): Integer;
+var
+  ra, rem, reset: string;
+  d: Int64;
+begin
+  Result := 0;
+  ra := HeaderValue(AClient.ResponseHeaders, 'Retry-After');
+  if ra <> '' then
+    Result := StrToIntDef(Trim(ra), 0);
+  rem := HeaderValue(AClient.ResponseHeaders, 'X-RateLimit-Remaining');
+  reset := HeaderValue(AClient.ResponseHeaders, 'X-RateLimit-Reset');
+  if (Trim(rem) = '0') and (reset <> '') then
+  begin
+    d := StrToInt64Def(Trim(reset), 0) - DateTimeToUnix(Now);
+    if d > Result then Result := d;
+  end;
+  if Result < 0 then Result := 0;
+end;
+
 function TGitHubApi.Request(const AMethod, AUrl, ABody: string;
   out AStatus: Integer; out AResponse: string): Boolean;
+const
+  MAX_RL_RETRIES = 2;    // bounded: at most this many rate-limit waits
+  RL_WAIT_CAP = 45;      // ...each capped so a call can't block a worker too long
 var
   client: TFPHTTPClient;
   reqBody: TStringStream;
   respStream: TStringStream;
+  attempt, waitSec: Integer;
 begin
   Result := False;
   AStatus := 0;
@@ -101,19 +144,40 @@ begin
       client.AddHeader('Content-Type', 'application/json');
     end;
 
-    try
-      client.HTTPMethod(AMethod, AUrl, respStream, []);
-      AStatus := client.ResponseStatusCode;
-      AResponse := respStream.DataString;
-      Result := True;
-    except
-      on E: Exception do
-      begin
-        if Assigned(Log) then
-          Log.Error('github', AMethod + ' ' + AUrl + ': ' + E.Message);
-        AResponse := E.Message;
-        Result := False;
+    for attempt := 0 to MAX_RL_RETRIES do
+    begin
+      try
+        respStream.Size := 0;   // fresh buffer for each (re)try
+        client.HTTPMethod(AMethod, AUrl, respStream, []);
+        AStatus := client.ResponseStatusCode;
+        AResponse := respStream.DataString;
+        Result := True;
+      except
+        on E: Exception do
+        begin
+          if Assigned(Log) then
+            Log.Error('github', AMethod + ' ' + AUrl + ': ' + E.Message);
+          AResponse := E.Message;
+          Result := False;
+          Break;
+        end;
       end;
+      // GitHub signals rate limiting with 403/429; wait out the reset and retry
+      // rather than surfacing a confusing failure. Bounded so we never hang.
+      if ((AStatus = 403) or (AStatus = 429)) and (attempt < MAX_RL_RETRIES) then
+      begin
+        waitSec := RateLimitWaitSec(client);
+        if waitSec > 0 then
+        begin
+          if waitSec > RL_WAIT_CAP then waitSec := RL_WAIT_CAP;
+          if Assigned(Log) then
+            Log.Warn('github', Format('rate limited; waiting %ds then retrying %s',
+              [waitSec, AUrl]));
+          Sleep(waitSec * 1000);
+          Continue;
+        end;
+      end;
+      Break;   // success, non-rate-limit status, or out of retries
     end;
   finally
     respStream.Free;
