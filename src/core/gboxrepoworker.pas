@@ -39,6 +39,13 @@ type
     remote changes, so the engine can re-scan .gitmodules and add/drop submodule
     workers. The handler must marshal any UI/engine work to the main thread. }
   TReposChangedEvent = procedure of object;
+
+{ Exponential backoff (milliseconds, no jitter) for the AStreak-th consecutive
+  hard error: ABaseMs, doubling each further failure, capped at AMaxMs. Pure, so
+  the escalation is unit-testable. }
+function BackoffDelayMs(AStreak, ABaseMs, AMaxMs: Integer): Integer;
+
+type
   { Fired (on the worker thread) at the end of every sync cycle, with this
     repo's working-tree path, so the owner can invalidate a per-file status
     cache (used by the file-manager overlay). }
@@ -69,9 +76,15 @@ type
     FLastChange: TDateTime;
     FLastCycle: TDateTime;
     FLastFull: TDateTime;         // last time a full sync cycle actually ran
-    FSyncedRemoteSha: string;     // origin/main tip as of our last in-sync cycle
+    FBranch: string;              // this repo's branch (main/master/...), resolved live
+    FSyncedRemoteSha: string;     // origin/<branch> tip as of our last in-sync cycle
     FCommitsSinceGc: Integer;
     FOfflineStreak: Integer;      // consecutive network-failure cycles (hysteresis)
+    FOversize: TStringList;       // files blocked for exceeding GitHub's 100 MB limit
+    FOversizeNotified: Boolean;   // fired the "file too large" notice yet?
+    FErrorStreak: Integer;        // consecutive hard-error cycles (drives backoff)
+    FBackoffUntil: TDateTime;     // suppress cycles for a failing repo until this time
+    FStuckNotified: Boolean;      // fired the "repo is stuck" notice yet?
     FOnNotice: TSyncNoticeEvent;
     FOnReposChanged: TReposChangedEvent;
     FOnCycleDone: TCycleDoneEvent;
@@ -101,6 +114,18 @@ implementation
 
 uses
   gboxlog, gboxsuper;
+
+function BackoffDelayMs(AStreak, ABaseMs, AMaxMs: Integer): Integer;
+var
+  mult, k: Integer;
+begin
+  if AStreak < 1 then Exit(0);
+  mult := 1;
+  for k := 1 to AStreak - 1 do
+    if mult <= AMaxMs div ABaseMs then mult := mult * 2;   // stop doubling past cap
+  Result := ABaseMs * mult;
+  if Result > AMaxMs then Result := AMaxMs;
+end;
 
 { Build a notification for the files synced this cycle: list up to 3 names,
   otherwise just the count. Submodule files are prefixed with the repo name. }
@@ -149,8 +174,12 @@ begin
   FPullIntervalMs := APullIntervalSec * 1000;
   FHistoryCap := AHistoryCap;
   FLfsThresholdMB := ALfsThresholdMB;
+  FBranch := 'main';   // resolved from the actual checkout on the first cycle
   FStatus := AStatus;
   FLock := TCriticalSection.Create;
+  FOversize := TStringList.Create;
+  FOversize.Sorted := True;
+  FOversize.Duplicates := dupIgnore;
   FIgnore := TStringList.Create;
   if Assigned(AIgnore) then FIgnore.Assign(AIgnore);
   FWatcher := CreateFileWatcher(FLocalPath, FIgnore);
@@ -161,6 +190,7 @@ destructor TRepoWorker.Destroy;
 begin
   FWatcher.Free;
   FIgnore.Free;
+  FOversize.Free;
   FLock.Free;
   inherited Destroy;
 end;
@@ -210,10 +240,10 @@ begin
     git.AuthUser := FUser;
     git.AuthToken := FToken;
     git.DefaultTimeoutMs := GIT_DEFAULT_TIMEOUT_MS;
-    r := git.GitQuiet(['ls-remote', 'origin', 'refs/heads/main']);
+    r := git.GitQuiet(['ls-remote', 'origin', 'refs/heads/' + FBranch]);
     if not r.Ok then Exit(True);               // can't tell -> full cycle
     sha := Trim(r.StdOut);
-    p := Pos(#9, sha);                          // "<sha>\trefs/heads/main"
+    p := Pos(#9, sha);                          // "<sha>\trefs/heads/<branch>"
     if p > 1 then sha := Copy(sha, 1, p - 1);
     if sha = '' then Exit(True);               // no remote branch yet -> full cycle
     Result := (sha <> FSyncedRemoteSha);
@@ -227,12 +257,17 @@ const
   TRAY_SYNC_MIN_MS = 450;   // keep "syncing" visible even for an instant cycle
   OFFLINE_GRACE = 2;        // show "offline" only after this many consecutive
   // network failures (ignore isolated transient blips)
+  BACKOFF_BASE_MS = 15000;  // first hard-error wait; doubles each further failure
+  BACKOFF_MAX_MS = 300000;  // ...capped at 5 min so a failing repo stops hammering
+  STUCK_AFTER = 5;          // after this many consecutive errors, flag "stuck" + notify
 var
   git: TGitRunner;
   outcome: TSyncOutcome;
-  detail, td, ntitle, nbody: string;
+  detail, td, ntitle, nbody, elc: string;
   conflicts, changed: TStringList;
   syncStart: TDateTime;
+  delayMs: Integer;
+  contention: Boolean;
 begin
   // A submodule whose working folder the user deleted: stop syncing it rather
   // than spinning on a missing directory (git would just fail every cycle). The
@@ -260,6 +295,13 @@ begin
     // -- indefinitely; it fails the cycle instead and retries next time.
     git.DefaultTimeoutMs := GIT_DEFAULT_TIMEOUT_MS;
 
+    // Resolve the branch this repo actually lives on (main, master, ...), so a
+    // linked existing repo that defaults to a non-main branch syncs correctly.
+    // `push origin HEAD` already targets the right branch; this makes the
+    // origin/<branch> comparisons match it.
+    FBranch := git.CurrentBranch;
+    if (FBranch = '') or (FBranch = 'HEAD') then FBranch := 'main';
+
     if FAutoSync then
     begin
       // ensure a committer identity so commits succeed even with no global git
@@ -269,26 +311,43 @@ begin
 
       // Register oversized files with Git LFS before the cycle commits them, so
       // they become LFS pointers instead of blowing GitHub's 100 MB push limit.
-      if FLfsThresholdMB > 0 then
+      if not FLfsChecked then
       begin
-        if not FLfsChecked then
+        FLfsChecked := True;
+        FLfsOk := LfsAvailable(git);
+        if (not FLfsOk) and Assigned(Log) then
+          Log.Warn('worker', FName + ': git-lfs not installed; files over ' +
+            '100 MB cannot be synced (install git-lfs)');
+      end;
+      if (FLfsThresholdMB > 0) and FLfsOk then
+        TrackLargeFiles(git, Int64(FLfsThresholdMB) * 1024 * 1024);
+
+      // Guard GitHub's hard 100 MB per-file limit: any working-tree file at/over
+      // it that LFS is NOT going to absorb is excluded from the commit (so we
+      // never record a doomed blob that fails every push forever) and surfaced as
+      // a clear error below. When LFS will handle oversized files (installed +
+      // threshold in 1..100), clear any prior block so those files sync normally.
+      if FLfsOk and (FLfsThresholdMB > 0) and (FLfsThresholdMB <= 100) then
+      begin
+        if FOversize.Count > 0 then
         begin
-          FLfsChecked := True;
-          FLfsOk := LfsAvailable(git);
-          if (not FLfsOk) and Assigned(Log) then
-            Log.Warn('worker', FName + ': git-lfs not installed; files over ' +
-              IntToStr(FLfsThresholdMB) + ' MB may be rejected on push');
+          FOversize.Clear;
+          WriteExcludeBlock(git, FOversize);
         end;
-        if FLfsOk then
-          TrackLargeFiles(git, Int64(FLfsThresholdMB) * 1024 * 1024);
+        FOversizeNotified := False;
+      end
+      else
+      begin
+        FindOversizeUnhandled(git, GITHUB_FILE_LIMIT, FOversize);
+        WriteExcludeBlock(git, FOversize);
       end;
 
-      outcome := RunSyncCycle(git, FMachine, detail, conflicts, changed);
+      outcome := RunSyncCycle(git, FMachine, detail, conflicts, changed, FBranch);
     end
     else
       // managed: transport committed state only -- never set the user's git
       // identity, touch LFS, stage, commit, or trim history (RunManagedCycle)
-      outcome := RunManagedCycle(git, detail, changed);
+      outcome := RunManagedCycle(git, detail, changed, FBranch);
 
     // notify about files synced this cycle (added/modified, up or down)
     if (outcome in [soPushed, soPulled, soMerged, soReset]) and
@@ -310,8 +369,50 @@ begin
     case outcome of
       soError:
       begin
-        if Assigned(FStatus) then FStatus.SetState(FName, rsError, detail);
-        if Assigned(Log) then Log.Warn('worker', FName + ': ' + detail);
+        // A push losing a race with another machine (remote advanced between our
+        // fetch and push) is transient contention, not a stuck repo: retry soon
+        // and don't escalate toward "stuck". A genuine hard error (oversize file,
+        // corrupt object, auth) escalates an exponential backoff so it stops
+        // hammering the remote every interval, and after STUCK_AFTER failures it
+        // is flagged + notified once.
+        elc := LowerCase(detail);
+        contention := (Pos('rejected', elc) > 0) or (Pos('fetch first', elc) > 0) or
+          (Pos('non-fast-forward', elc) > 0) or (Pos('stale info', elc) > 0);
+        if contention then
+        begin
+          FBackoffUntil := IncMilliSecond(Now, 1000 + Random(2000));
+          if Assigned(FStatus) then FStatus.SetState(FName, rsSyncing,
+              'remote moved during push; retrying');
+        end
+        else
+        begin
+          Inc(FErrorStreak);
+          // A corrupt local object store won't heal by retrying: surface a clear,
+          // actionable state immediately (jump to "stuck") so the user knows to
+          // re-clone this folder, rather than spinning silently.
+          if IsCorruptionError(detail) then
+          begin
+            detail := 'repository data is corrupted -- re-clone this folder to ' +
+              'recover (' + detail + ')';
+            if FErrorStreak < STUCK_AFTER then FErrorStreak := STUCK_AFTER;
+          end;
+          delayMs := BackoffDelayMs(FErrorStreak, BACKOFF_BASE_MS, BACKOFF_MAX_MS);
+          delayMs := delayMs + Random(delayMs div 5 + 1);   // +0..20% jitter
+          FBackoffUntil := IncMilliSecond(Now, delayMs);
+          if Assigned(FStatus) then
+            if FErrorStreak >= STUCK_AFTER then
+              FStatus.SetState(FName, rsError,
+                Format('%s (stuck after %d tries)', [detail, FErrorStreak]))
+            else
+              FStatus.SetState(FName, rsError, detail);
+          if Assigned(Log) then Log.Warn('worker', FName + ': ' + detail);
+          if (FErrorStreak = STUCK_AFTER) and (not FStuckNotified) then
+          begin
+            if Assigned(FOnNotice) then
+              FOnNotice('GotBox - sync problem', FName + ': ' + detail);
+            FStuckNotified := True;
+          end;
+        end;
       end;
       soOffline:
       begin
@@ -356,13 +457,40 @@ begin
     if outcome <> soOffline then
       FOfflineStreak := 0;   // any reachable-remote outcome clears the streak
 
+    // a healthy cycle clears the hard-error backoff/stuck state
+    if not (outcome in [soError, soOffline]) then
+    begin
+      FErrorStreak := 0;
+      FBackoffUntil := 0;
+      FStuckNotified := False;
+    end;
+
+    // A file too large for GitHub that LFS can't absorb is a persistent local
+    // problem the user must fix: it was kept out of the commit, so the rest of
+    // the repo still syncs, but keep the repo flagged (overriding the cycle's
+    // "synced") and notify once so the user knows why that file isn't syncing.
+    if (FOversize.Count > 0) and (outcome <> soOffline) then
+    begin
+      td := 'file too large for GitHub (>100 MB) without git-lfs: ' + FOversize[0];
+      if FOversize.Count > 1 then
+        td := td + Format(' (+%d more)', [FOversize.Count - 1]);
+      if Assigned(FStatus) then FStatus.SetState(FName, rsError,
+          td + ' -- install git-lfs to sync it');
+      if (not FOversizeNotified) then
+      begin
+        if Assigned(FOnNotice) then
+          FOnNotice('GotBox - file too large to sync', td);
+        FOversizeNotified := True;
+      end;
+    end;
+
     // Remember the remote tip while we're fully in sync, so the periodic
     // ls-remote fast-check (RemoteAdvanced) can skip the full cycle when nothing
     // has changed remotely. Clear it on failure so the next check runs a full
     // cycle (retries the push/fetch).
     if outcome in [soUpToDate, soPushed, soPulled, soMerged, soReset, soConflict] then
       FSyncedRemoteSha :=
-        Copy(Trim(git.GitQuiet(['rev-parse', 'origin/main']).StdOut), 1, 64)
+        Copy(Trim(git.GitQuiet(['rev-parse', 'origin/' + FBranch]).StdOut), 1, 64)
     else
       FSyncedRemoteSha := '';
 
@@ -388,7 +516,7 @@ begin
     if FAutoSync and (outcome <> soError) and (outcome <> soOffline) and
       ShouldTrim(git, FHistoryCap) then
     begin
-      if TrimHistory(git, FHistoryCap, td) then
+      if TrimHistory(git, FHistoryCap, td, FBranch) then
       begin
         if Assigned(FStatus) then FStatus.SetState(FName, rsSynced, 'history trimmed');
       end
@@ -409,7 +537,7 @@ procedure TRepoWorker.Execute;
 const
   PERIODIC_FULL_MS = 300000;   // force a full cycle at least every 5 min anyway
 var
-  due, active, periodic: Boolean;
+  due, active, periodic, forced: Boolean;
 begin
   FWatcher.Start;
   try
@@ -418,6 +546,20 @@ begin
     RequestSync;
     while not Terminated do
     begin
+      // A repo that just hit a hard error backs off (exponentially): skip cycles
+      // until FBackoffUntil so we don't hammer the remote every interval. An
+      // explicit "Sync now" (FForce) always breaks through and is handled below;
+      // pending local changes and the periodic timer are left untouched so they
+      // fire as soon as the backoff expires.
+      FLock.Enter;
+      forced := FForce;
+      FLock.Leave;
+      if (FBackoffUntil > 0) and (Now < FBackoffUntil) and (not forced) then
+      begin
+        Sleep(150);
+        Continue;
+      end;
+
       active := False;     // "sync now" or a debounced local change -> full cycle
       periodic := False;   // periodic sync-down -> gated by the cheap fast-check
       FLock.Enter;

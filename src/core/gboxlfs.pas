@@ -34,8 +34,26 @@ interface
 uses
   Classes, SysUtils, gboxgitrunner;
 
+const
+  { GitHub rejects a plain `git push` containing any file over this size; nothing
+    GotBox can do transports such a file without Git LFS. }
+  GITHUB_FILE_LIMIT = Int64(100) * 1024 * 1024;
+
 { True if the `git lfs` command works (git-lfs is installed and on PATH). }
 function LfsAvailable(AGit: TGitRunner): Boolean;
+
+{ Append to AOut (deduplicated, repo-relative) each new/modified working-tree
+  file that is at/above AHardLimitBytes and NOT already LFS-tracked -- i.e. a
+  file that would be rejected on push and that Git LFS is not going to absorb.
+  Returns AOut's resulting count. Never removes entries (the caller keeps a
+  persistent blocked set). }
+function FindOversizeUnhandled(AGit: TGitRunner; AHardLimitBytes: Int64;
+  AOut: TStrings): Integer;
+
+{ Maintain a managed block in <git-dir>/info/exclude listing ABlocked (so a
+  `git add -A` skips them and they are never committed as a doomed >100 MB blob).
+  Removes the block when ABlocked is empty. Foreign lines are preserved. }
+procedure WriteExcludeBlock(AGit: TGitRunner; ABlocked: TStrings);
 
 { For each new/modified file in AGit's working tree that is >= AThresholdBytes
   and not already LFS-tracked, install the repo's LFS filters (once) and register
@@ -156,6 +174,77 @@ begin
     end;
   finally
     lines.Free;
+  end;
+end;
+
+function FindOversizeUnhandled(AGit: TGitRunner; AHardLimitBytes: Int64;
+  AOut: TStrings): Integer;
+var
+  st: TGitResult;
+  lines: TStringList;
+  i: Integer;
+  rel, full: string;
+begin
+  Result := 0;
+  if AOut = nil then Exit;
+  st := AGit.GitQuiet(['status', '--porcelain', '--untracked-files=all']);
+  if st.Ok then
+  begin
+    lines := TStringList.Create;
+    try
+      lines.Text := st.StdOut;
+      for i := 0 to lines.Count - 1 do
+      begin
+        if Trim(lines[i]) = '' then Continue;
+        rel := StatusPath(lines[i]);
+        if rel = '' then Continue;
+        full := IncludeTrailingPathDelimiter(AGit.WorkDir) + rel;
+        if FileSizeBytes(full) < AHardLimitBytes then Continue;
+        if IsLfsTracked(AGit, rel) then Continue;    // LFS will absorb it
+        if AOut.IndexOf(rel) < 0 then AOut.Add(rel);
+      end;
+    finally
+      lines.Free;
+    end;
+  end;
+  Result := AOut.Count;
+end;
+
+const
+  OVERSIZE_BEGIN = '# >>> gotbox: oversize files (need git-lfs, not synced) >>>';
+  OVERSIZE_END = '# <<< gotbox oversize <<<';
+
+procedure WriteExcludeBlock(AGit: TGitRunner; ABlocked: TStrings);
+var
+  gitDir, exclPath: string;
+  excl: TStringList;
+  a, b, i: Integer;
+begin
+  gitDir := Trim(AGit.GitQuiet(['rev-parse', '--absolute-git-dir']).StdOut);
+  if gitDir = '' then Exit;
+  exclPath := IncludeTrailingPathDelimiter(gitDir) + 'info' + PathDelim + 'exclude';
+  excl := TStringList.Create;
+  try
+    if FileExists(exclPath) then excl.LoadFromFile(exclPath);
+    // drop any previous managed block
+    a := excl.IndexOf(OVERSIZE_BEGIN);
+    if a >= 0 then
+    begin
+      b := excl.IndexOf(OVERSIZE_END);
+      if b < a then b := excl.Count - 1;
+      for i := b downto a do excl.Delete(i);
+    end;
+    // re-add it from the current blocked set (leading '/' anchors to repo root)
+    if (ABlocked <> nil) and (ABlocked.Count > 0) then
+    begin
+      excl.Add(OVERSIZE_BEGIN);
+      for i := 0 to ABlocked.Count - 1 do excl.Add('/' + ABlocked[i]);
+      excl.Add(OVERSIZE_END);
+    end;
+    ForceDirectories(ExtractFilePath(exclPath));
+    excl.SaveToFile(exclPath);
+  finally
+    excl.Free;
   end;
 end;
 

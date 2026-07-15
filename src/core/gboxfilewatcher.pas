@@ -288,6 +288,8 @@ type
     FOwner: TInotifyFileWatcher;
     FFd: cint;
     FWatchPaths: TStringList;   // Objects[i] = wd
+    FLimitHit: Boolean;         // an inotify watch was refused (max_user_watches)
+    FWarned: Boolean;           // logged the watch-limit warning yet?
     function PathForWd(AWd: cint): string;
     procedure AddWatch(const APath: string);
     procedure AddWatchRecursive(const APath: string);
@@ -332,7 +334,27 @@ var
   i: Integer;
 begin
   wd := inotify_add_watch(FFd, PChar(APath), INMASK);
-  if wd < 0 then Exit;
+  if wd < 0 then
+  begin
+    // ENOSPC = the per-user inotify watch limit (fs.inotify.max_user_watches) is
+    // exhausted -- a large tree then has un-watched subdirs whose changes we'd
+    // otherwise miss silently. Warn once (actionable) and switch on a coarse
+    // periodic re-scan so those changes are still caught within seconds.
+    if fpgeterrno = ESysENOSPC then
+    begin
+      FLimitHit := True;
+      if (not FWarned) then
+      begin
+        FWarned := True;
+        if Assigned(Log) then
+          Log.Warn('watch', FOwner.FRoot +
+            ': inotify watch limit reached (fs.inotify.max_user_watches); ' +
+            'falling back to periodic re-scan for uncovered folders -- raise ' +
+            'the limit to restore instant detection');
+      end;
+    end;
+    Exit;
+  end;
   for i := 0 to FWatchPaths.Count - 1 do
     if PtrInt(FWatchPaths.Objects[i]) = wd then
     begin
@@ -363,6 +385,8 @@ begin
 end;
 
 procedure TInotifyThread.Execute;
+const
+  DEGRADED_POLL_MS = 10000;   // when watches were refused, re-scan this often
 var
   buf: array[0..8191] of Byte;
   r, i: PtrInt;
@@ -370,12 +394,23 @@ var
   ev: Pinotify_event;
   evName, parent: string;
   isDir: Boolean;
+  lastPoll: QWord;
 begin
   hdr := PtrUInt(@(Pinotify_event(nil)^.name));   // offset of the name field
   AddWatchRecursive(FOwner.FRoot);
+  lastPoll := GetTickCount64;
 
   while not Terminated do
   begin
+    // degraded mode: some subdirs are un-watched (watch limit hit), so fire a
+    // coarse periodic change to make the worker re-scan and catch what inotify
+    // can't report -- ~10 s latency instead of silent misses.
+    if FLimitHit and (GetTickCount64 - lastPoll >= DEGRADED_POLL_MS) then
+    begin
+      lastPoll := GetTickCount64;
+      FOwner.Fire;
+    end;
+
     r := fpRead(FFd, buf, SizeOf(buf));
     if r <= 0 then
     begin

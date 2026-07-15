@@ -74,7 +74,8 @@ var
   u: TGitResult;
   lines: TStringList;
   i: Integer;
-  rel, oursContent, copyRel, absCopy: string;
+  rel, copyRel, absCopy: string;
+  wrote: Int64;
 begin
   Result := 0;
   // unmerged paths (git reports them with forward slashes)
@@ -89,12 +90,17 @@ begin
       rel := Trim(lines[i]);
       if rel = '' then Continue;
 
-      // "ours" = stage 2 (the local version); save it as the keep-both copy
-      oursContent := AGit.ShowStage(2, rel).StdOut;
+      // "ours" = stage 2 (the local version); save it as the keep-both copy.
+      // Stream the blob straight to disk so binary content (embedded NULs) is
+      // copied byte-for-byte -- routing it through a Pascal string truncated
+      // binaries at the first NUL.
       copyRel := ConflictCopyName(rel, AMachine);
       absCopy := IncludeTrailingPathDelimiter(AGit.WorkDir) +
         StringReplace(copyRel, '/', PathDelim, [rfReplaceAll]);
-      SaveRaw(absCopy, oursContent);
+      if not AGit.ShowStageToFile(2, rel, absCopy, wrote) then
+        // fall back to the string path (e.g. an added/added conflict with no
+        // stage 2 for this side) so we still keep a copy rather than nothing
+        SaveRaw(absCopy, AGit.ShowStage(2, rel).StdOut);
 
       // put "theirs" (the remote version) at the real path, then stage both
       AGit.CheckoutTheirs(rel);

@@ -45,14 +45,22 @@ type
 
 function SyncOutcomeText(AOutcome: TSyncOutcome): string;
 
+{ True if AText (git stderr / a cycle detail) looks like local repository
+  corruption -- a damaged object store that a normal cycle can't fix by itself
+  (it needs re-cloning). Used to give the user an actionable state instead of
+  retrying a doomed cycle forever. }
+function IsCorruptionError(const AText: string): Boolean;
+
 { Runs one cycle on AGit's repo. Conflict copy paths (if any) are appended to
   AConflicts. ADetail carries an error/explanation string. When AChanged is
   given, the files added/modified this cycle (local commits + pulled changes)
   are appended to it (deduplicated, repo-relative). }
 function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
-  out ADetail: string; AConflicts: TStrings): TSyncOutcome; overload;
+  out ADetail: string; AConflicts: TStrings;
+  const ABranch: string = 'main'): TSyncOutcome; overload;
 function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
-  out ADetail: string; AConflicts, AChanged: TStrings): TSyncOutcome; overload;
+  out ADetail: string; AConflicts, AChanged: TStrings;
+  const ABranch: string = 'main'): TSyncOutcome; overload;
 
 { "Managed" cycle for a submodule the user commits by hand: transport committed
   state only. NEVER stages, commits, creates a merge commit, resets, or force-
@@ -62,7 +70,7 @@ function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
   for the user to resolve. Incoming pulled files (if any) are appended to
   AChanged. }
 function RunManagedCycle(AGit: TGitRunner; out ADetail: string;
-  AChanged: TStrings): TSyncOutcome;
+  AChanged: TStrings; const ABranch: string = 'main'): TSyncOutcome;
 
 implementation
 
@@ -85,6 +93,19 @@ end;
 function CommitMsg(const AMachine: string): string;
 begin
   Result := Format('%s %s', [AMachine, FormatDateTime('yyyy-mm-dd hh:nn:ss', Now)]);
+end;
+
+function IsCorruptionError(const AText: string): Boolean;
+var
+  s: string;
+begin
+  s := LowerCase(AText);
+  Result := (Pos('corrupt', s) > 0) or               // "loose object ... is corrupt"
+    (Pos('loose object', s) > 0) or (Pos('object file', s) > 0) or
+    // "object file ... is empty"
+    (Pos('bad object', s) > 0) or (Pos('unable to read tree', s) > 0) or
+    (Pos('did not receive expected object', s) > 0) or
+    (Pos('object of unexpected type', s) > 0) or (Pos('sha1 mismatch', s) > 0);
 end;
 
 const
@@ -278,18 +299,19 @@ begin
 end;
 
 function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
-  out ADetail: string; AConflicts: TStrings): TSyncOutcome;
+  out ADetail: string; AConflicts: TStrings; const ABranch: string): TSyncOutcome;
 begin
-  Result := RunSyncCycle(AGit, AMachine, ADetail, AConflicts, nil);
+  Result := RunSyncCycle(AGit, AMachine, ADetail, AConflicts, nil, ABranch);
 end;
 
 function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
-  out ADetail: string; AConflicts, AChanged: TStrings): TSyncOutcome;
+  out ADetail: string; AConflicts, AChanged: TStrings;
+  const ABranch: string): TSyncOutcome;
 var
   r, mr: TGitResult;
   behind, ahead: Integer;
   hadStash: Boolean;
-  fetchErr: string;
+  fetchErr, remoteRef: string;
 
 // append name-only output of a git command to AChanged (deduplicated)
   procedure Collect(const AArgs: array of string);
@@ -345,16 +367,32 @@ var
   end;
 
   function PushNow: Boolean;
+  var
+    e: string;
   begin
     r := AGit.Push(False);
     Result := r.Ok;
-    if not Result then ADetail := 'push failed: ' + Trim(r.StdErr);
+    if not Result then
+    begin
+      // give GitHub's 100 MB rejection an actionable message instead of raw gunk
+      // (GH001 / "this exceeds GitHub's file size limit of 100.00 MB")
+      e := LowerCase(r.StdErr);
+      if (Pos('gh001', e) > 0) or (Pos('file size limit', e) > 0) or
+        (Pos('exceeds github', e) > 0) then
+        ADetail := 'a file exceeds GitHub''s 100 MB limit; install git-lfs or ' +
+          'remove the file (' + Trim(r.StdErr) + ')'
+      else
+        ADetail := 'push failed: ' + Trim(r.StdErr);
+    end;
   end;
 
 begin
   ADetail := '';
+  remoteRef := 'origin/' + ABranch;
 
-  // 0. keep stray nested repos out of the commit (no accidental submodules)
+  // 0. clear a stale index.lock left by a previously-killed op (else every
+  //    add/commit here would fail), then keep stray nested repos out of the commit
+  AGit.SweepStaleIndexLock;
   ReconcileStrayGitlinks(AGit);
 
   // 1. fetch
@@ -388,7 +426,7 @@ begin
   end;
 
   // 2. remote branch present?
-  if not AGit.GitQuiet(['rev-parse', '--verify', 'origin/main']).Ok then
+  if not AGit.GitQuiet(['rev-parse', '--verify', remoteRef]).Ok then
   begin
     if not CommitLocal then Exit(soError);
     // nothing committed yet (e.g. an empty folder) -> nothing to push
@@ -399,12 +437,12 @@ begin
   end;
 
   // 3. rewritten remote? (no common ancestor between local and remote)
-  if not AGit.GitQuiet(['merge-base', 'HEAD', 'origin/main']).Ok then
+  if not AGit.GitQuiet(['merge-base', 'HEAD', remoteRef]).Ok then
   begin
-    Collect(['diff', '--name-only', 'HEAD', 'origin/main']);   // incoming changes
+    Collect(['diff', '--name-only', 'HEAD', remoteRef]);   // incoming changes
     hadStash := AGit.HasUncommittedChanges;
     if hadStash then AGit.Stash;
-    AGit.ResetHard('origin/main');
+    AGit.ResetHard(remoteRef);
     if hadStash then
     begin
       if not AGit.StashPop.Ok then
@@ -418,7 +456,7 @@ begin
       end;
       // replayed cleanly -> commit + push the local edits onto the new base
       if not CommitLocal then Exit(soError);
-      if AGit.CountRange('origin/main..HEAD') > 0 then
+      if AGit.CountRange(remoteRef + '..HEAD') > 0 then
         if not PushNow then Exit(soError);
     end;
     Exit(soReset);
@@ -427,8 +465,8 @@ begin
   // 4. normal path: commit local changes, then reconcile
   if not CommitLocal then Exit(soError);
 
-  behind := AGit.CountRange('HEAD..origin/main');   // commits only on remote
-  ahead := AGit.CountRange('origin/main..HEAD');     // commits only on local
+  behind := AGit.CountRange('HEAD..' + remoteRef);   // commits only on remote
+  ahead := AGit.CountRange(remoteRef + '..HEAD');     // commits only on local
   if (behind < 0) or (ahead < 0) then
   begin
     ADetail := 'could not compare with remote';
@@ -444,19 +482,19 @@ begin
   end;
 
   // behind > 0: remote has changes we're about to pull in -- record them
-  Collect(['diff', '--name-only', 'HEAD', 'origin/main']);
+  Collect(['diff', '--name-only', 'HEAD', remoteRef]);
 
   // behind > 0
   if ahead = 0 then
   begin
-    r := AGit.Merge('origin/main');   // fast-forward
+    r := AGit.Merge(remoteRef);   // fast-forward
     if r.Ok then Exit(soPulled);
     ADetail := 'fast-forward failed: ' + Trim(r.StdErr);
     Exit(soError);
   end;
 
   // diverged: try to merge
-  mr := AGit.Merge('origin/main');
+  mr := AGit.Merge(remoteRef);
   if mr.Ok then
   begin
     if PushNow then Exit(soMerged)
@@ -479,10 +517,10 @@ begin
 end;
 
 function RunManagedCycle(AGit: TGitRunner; out ADetail: string;
-  AChanged: TStrings): TSyncOutcome;
+  AChanged: TStrings; const ABranch: string = 'main'): TSyncOutcome;
 var
   r: TGitResult;
-  fetchErr: string;
+  fetchErr, remoteRef: string;
   behind, ahead: Integer;
   dirty: Boolean;
 
@@ -494,7 +532,7 @@ var
     ln: string;
   begin
     if AChanged = nil then Exit;
-    rr := AGit.GitQuiet(['diff', '--name-only', 'HEAD', 'origin/main']);
+    rr := AGit.GitQuiet(['diff', '--name-only', 'HEAD', remoteRef]);
     if not rr.Ok then Exit;
     sl := TStringList.Create;
     try
@@ -511,6 +549,9 @@ var
 
 begin
   ADetail := '';
+  remoteRef := 'origin/' + ABranch;
+
+  AGit.SweepStaleIndexLock;   // clear a lock left by a killed op before merging
 
   // 1. fetch (same offline / not-found classification as RunSyncCycle, but we
   // never commit local work here -- managed repos are the user's to commit)
@@ -544,7 +585,7 @@ begin
 
   // 2. remote branch missing: push our committed history if we have any (only
   // when clean so we don't imply the working tree is in sync); never commit
-  if not AGit.GitQuiet(['rev-parse', '--verify', 'origin/main']).Ok then
+  if not AGit.GitQuiet(['rev-parse', '--verify', remoteRef]).Ok then
   begin
     if (not dirty) and (AGit.CountCommits > 0) then
     begin
@@ -558,14 +599,14 @@ begin
 
   // 3. rewritten remote (no common ancestor): adopting it would need a hard
   // reset -- destructive to the user's history, so we refuse and surface it
-  if not AGit.GitQuiet(['merge-base', 'HEAD', 'origin/main']).Ok then
+  if not AGit.GitQuiet(['merge-base', 'HEAD', remoteRef]).Ok then
   begin
     ADetail := 'remote history was rewritten; resolve this submodule manually';
     Exit(soConflict);
   end;
 
-  behind := AGit.CountRange('HEAD..origin/main');    // commits only on remote
-  ahead := AGit.CountRange('origin/main..HEAD');      // commits only on local
+  behind := AGit.CountRange('HEAD..' + remoteRef);    // commits only on remote
+  ahead := AGit.CountRange(remoteRef + '..HEAD');      // commits only on local
   if (behind < 0) or (ahead < 0) then
   begin
     ADetail := 'could not compare with remote';
@@ -601,7 +642,7 @@ begin
   if ahead = 0 then
   begin
     CollectIncoming;
-    r := AGit.Merge('origin/main');                    // fast-forward only
+    r := AGit.Merge(remoteRef);                    // fast-forward only
     if r.Ok then Exit(soPulled);
     ADetail := 'fast-forward failed: ' + Trim(r.StdErr);
     Exit(soError);

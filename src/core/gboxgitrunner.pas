@@ -64,8 +64,13 @@ type
     FAuthUser: string;
     FAuthToken: string;
     FQuiet: Boolean;   // suppress warn-logging for expected-to-fail probes
-    FDefaultTimeoutMs: Integer;   // applied to ops that don't pass their own (0 = untimed)
-    function Run(const AArgs: array of string; ATimeoutMs: Integer = 0): TGitResult;
+    FDefaultTimeoutMs: Integer;
+    // applied to ops that don't pass their own (0 = untimed)
+    { When AOutStream is given, stdout bytes are streamed to it verbatim (binary
+      safe) and Result.StdOut is left empty; otherwise stdout is captured into
+      Result.StdOut as before. stderr is always captured to a string. }
+    function Run(const AArgs: array of string; ATimeoutMs: Integer = 0;
+      AOutStream: TStream = nil): TGitResult;
     function EnsureAskPass: string;
   public
     { AWorkDir is the repo working tree (may be empty for clone/global ops). }
@@ -109,9 +114,22 @@ type
       AMinAgeSec seconds, so an actively-downloading pack (its mtime advances as
       bytes land) is never touched. Safe no-op if there are none. }
     procedure PrunePartialPacks(AMinAgeSec: Integer = 60);
+    { Remove a stale .git/index.lock left behind by a git op that was killed
+      (e.g. by the stall timeout) mid add/commit/merge -- otherwise every later
+      index write in this repo fails with "Unable to create '.../index.lock'".
+      Only deletes a lock older than AMinAgeSec so a genuinely in-flight op (this
+      worker serializes its own git, but the user might run git by hand) is never
+      disturbed. Safe no-op if there is none. }
+    procedure SweepStaleIndexLock(AMinAgeSec: Integer = 60);
     function Merge(const ARef: string): TGitResult;
     function CountRange(const ARange: string): Integer; // commits in ARange (-1 err)
     function ShowStage(AStage: Integer; const APath: string): TGitResult;
+    { Write the raw bytes of a staged blob (stage 1/2/3 of a conflicted path)
+      straight to ADestFile, streaming through a file handle rather than a Pascal
+      string, so binary content with embedded NULs is copied byte-for-byte.
+      Returns True and the byte count on success. }
+    function ShowStageToFile(AStage: Integer; const APath, ADestFile: string;
+      out ABytes: Int64): Boolean;
     function CheckoutTheirs(const APath: string): TGitResult;
     function AddPath(const APath: string): TGitResult;
     function StatusPorcelain: TGitResult;
@@ -241,21 +259,24 @@ function GitTraceOn: Boolean;
 begin
   if gGitTrace < 0 then
     if GetEnvironmentVariable('GOTBOX_GIT_TRACE') <> '' then gGitTrace := 1
-    else gGitTrace := 0;
+    else
+      gGitTrace := 0;
   Result := gGitTrace = 1;
 end;
 
-function TGitRunner.Run(const AArgs: array of string; ATimeoutMs: Integer): TGitResult;
+function TGitRunner.Run(const AArgs: array of string; ATimeoutMs: Integer;
+  AOutStream: TStream): TGitResult;
 var
   proc: TProcess;
   outStream, errStream: TStringStream;
+  outTarget: TStream;   // where stdout bytes go: AOutStream (verbatim) or outStream
   buf: array[0..4095] of Byte;
   i, idle: Integer;
   cmdline, trace: string;
   started, lastData: TDateTime;
   timedOut: Boolean;
 
-  { Read whatever is currently available on both pipes; return bytes read. }
+{ Read whatever is currently available on both pipes; return bytes read. }
   function DrainAvail: LongInt;
   var
     m: LongInt;
@@ -266,14 +287,20 @@ var
     begin
       if m > SizeOf(buf) then m := SizeOf(buf);
       m := proc.Output.Read(buf, m);
-      if m > 0 then begin outStream.Write(buf, m); Inc(Result, m); end;
+      if m > 0 then begin
+        outTarget.Write(buf, m);
+        Inc(Result, m);
+      end;
     end;
     m := proc.Stderr.NumBytesAvailable;
     if m > 0 then
     begin
       if m > SizeOf(buf) then m := SizeOf(buf);
       m := proc.Stderr.Read(buf, m);
-      if m > 0 then begin errStream.Write(buf, m); Inc(Result, m); end;
+      if m > 0 then begin
+        errStream.Write(buf, m);
+        Inc(Result, m);
+      end;
     end;
   end;
 
@@ -296,6 +323,11 @@ begin
   proc := TProcess.Create(nil);
   outStream := TStringStream.Create('');
   errStream := TStringStream.Create('');
+  // stream stdout straight to the caller's stream when one is supplied
+  // (binary-safe copies), else accumulate it for Result.StdOut
+  if AOutStream <> nil then outTarget := AOutStream
+  else
+    outTarget := outStream;
   try
     proc.Executable := FGitExe;
     cmdline := 'git';
@@ -366,7 +398,9 @@ begin
         proc.Terminate(124);   // SIGTERM-equivalent; conventional "timed out" code
         Break;
       end;
-      if proc.Running then Sleep(5) else Sleep(1);
+      if proc.Running then Sleep(5)
+      else
+        Sleep(1);
     until False;
 
     if timedOut then
@@ -387,8 +421,8 @@ begin
       Log.Warn('git', Format('exit %d: %s', [Result.ExitCode, Trim(Result.StdErr)]));
     if GitTraceOn then
     begin
-      trace := Format('GIT< [t%u] exit=%d %dms%s %s', [PtrUInt(GetThreadID),
-        Result.ExitCode, MilliSecondsBetween(Now, started),
+      trace := Format('GIT< [t%u] exit=%d %dms%s %s',
+        [PtrUInt(GetThreadID), Result.ExitCode, MilliSecondsBetween(Now, started),
         BoolToStr(timedOut, ' TIMEOUT', ''), cmdline]);
       WriteLn(StdErr, trace);
       Flush(StdErr);
@@ -482,8 +516,8 @@ begin
     gitDir := IncludeTrailingPathDelimiter(FWorkDir) + gitDir;
   packDir := IncludeTrailingPathDelimiter(gitDir) + 'objects' + PathDelim + 'pack';
   if not DirectoryExists(packDir) then Exit;
-  if FindFirst(IncludeTrailingPathDelimiter(packDir) + 'tmp_pack_*',
-    faAnyFile, sr) <> 0 then Exit;
+  if FindFirst(IncludeTrailingPathDelimiter(packDir) + 'tmp_pack_*', faAnyFile, sr) <>
+    0 then Exit;
   try
     repeat
       if (sr.Attr and faDirectory) <> 0 then Continue;
@@ -496,6 +530,30 @@ begin
   finally
     FindClose(sr);
   end;
+end;
+
+procedure TGitRunner.SweepStaleIndexLock(AMinAgeSec: Integer);
+var
+  r: TGitResult;
+  gitDir, lockPath: string;
+  ft: TDateTime;
+begin
+  // resolve the object store (handles a submodule's ".git" gitdir-file too)
+  r := GitQuiet(['rev-parse', '--git-dir']);
+  if not r.Ok then Exit;
+  gitDir := Trim(r.StdOut);
+  if gitDir = '' then Exit;
+  if not PathIsAbsolute(gitDir) then
+    gitDir := IncludeTrailingPathDelimiter(FWorkDir) + gitDir;
+  lockPath := IncludeTrailingPathDelimiter(gitDir) + 'index.lock';
+  if not FileExists(lockPath) then Exit;
+  // only reclaim a lock that has been sitting untouched: a fresh one may belong
+  // to an op still starting up (ours are serialized, but a user's hand-run git
+  // could hold it legitimately)
+  if FileAge(lockPath, ft) and ((Now - ft) * SecsPerDay < AMinAgeSec) then Exit;
+  if DeleteFile(lockPath) and Assigned(Log) then
+    Log.Warn('git', 'removed stale index.lock (a git op was interrupted): ' +
+      lockPath);
 end;
 
 function TGitRunner.Fetch: TGitResult;
@@ -535,6 +593,27 @@ end;
 function TGitRunner.ShowStage(AStage: Integer; const APath: string): TGitResult;
 begin
   Result := Run(['show', Format(':%d:%s', [AStage, APath])]);
+end;
+
+function TGitRunner.ShowStageToFile(AStage: Integer; const APath, ADestFile: string;
+  out ABytes: Int64): Boolean;
+var
+  fs: TFileStream;
+  r: TGitResult;
+begin
+  Result := False;
+  ABytes := 0;
+  ForceDirectories(ExtractFilePath(ADestFile));
+  fs := TFileStream.Create(ADestFile, fmCreate);
+  try
+    // cat-file blob emits the object's raw bytes with no filtering; streamed
+    // straight to the file handle so embedded NULs survive intact
+    r := Run(['cat-file', 'blob', Format(':%d:%s', [AStage, APath])], 0, fs);
+    ABytes := fs.Size;
+    Result := r.Ok;
+  finally
+    fs.Free;
+  end;
 end;
 
 function TGitRunner.CheckoutTheirs(const APath: string): TGitResult;
@@ -590,6 +669,11 @@ function TGitRunner.CurrentBranch: string;
 var
   r: TGitResult;
 begin
+  // symbolic-ref resolves the branch even on an UNBORN branch (a fresh clone or
+  // init with no commits yet), where rev-parse --abbrev-ref HEAD fails outright;
+  // fall back to rev-parse for the (unusual, for GotBox) detached-HEAD case.
+  r := GitQuiet(['symbolic-ref', '--short', 'HEAD']);
+  if r.Ok and (Trim(r.StdOut) <> '') then Exit(Trim(r.StdOut));
   r := Run(['rev-parse', '--abbrev-ref', 'HEAD']);
   if r.Ok then Result := Trim(r.StdOut)
   else

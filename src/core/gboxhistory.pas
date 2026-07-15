@@ -58,7 +58,8 @@ function AddTag(AGit: TGitRunner; const ALabel, AMessage: string;
   (each an exact snapshot, tag label+message preserved) remain, plus the commits
   after the newest tag; then force-push the branch and moved tags. Rewrites
   history -- other machines pick it up via gboxsync's rewrite-safe reset. }
-function SquashBetweenTags(AGit: TGitRunner; out ADetail: string): Boolean;
+function SquashBetweenTags(AGit: TGitRunner; out ADetail: string;
+  const ABranch: string = 'main'): Boolean;
 
 { True if the repo has grown enough past ACap to be worth trimming. }
 function ShouldTrim(AGit: TGitRunner; ACap: Integer): Boolean;
@@ -66,7 +67,8 @@ function ShouldTrim(AGit: TGitRunner; ACap: Integer): Boolean;
 { Squashes history to the most recent ACap commits (+1 snapshot) and force-pushes.
   Returns True if a trim happened; ADetail explains failures. The working tree
   must be clean and on the branch being trimmed. }
-function TrimHistory(AGit: TGitRunner; ACap: Integer; out ADetail: string): Boolean;
+function TrimHistory(AGit: TGitRunner; ACap: Integer; out ADetail: string;
+  const ABranch: string = 'main'): Boolean;
 
 implementation
 
@@ -96,7 +98,8 @@ begin
   Result := (n > 0) and (n > 2 * ACap);
 end;
 
-function TrimHistory(AGit: TGitRunner; ACap: Integer; out ADetail: string): Boolean;
+function TrimHistory(AGit: TGitRunner; ACap: Integer; out ADetail: string;
+  const ABranch: string = 'main'): Boolean;
 var
   n, i: Integer;
   base, tree, snap, ts, msg, prev, ci: string;
@@ -116,8 +119,8 @@ begin
   // that is behind a fetched-but-unmerged origin/main -- which would overwrite
   // those commits (e.g. resurrect a file another machine deleted). Defer: the
   // next cycle merges origin/main first, then trims the up-to-date history.
-  if AGit.GitQuiet(['rev-parse', '--verify', 'origin/main']).Ok then
-    if AGit.CountRange('HEAD..origin/main') > 0 then
+  if AGit.GitQuiet(['rev-parse', '--verify', 'origin/' + ABranch]).Ok then
+    if AGit.CountRange('HEAD..origin/' + ABranch) > 0 then
     begin
       ADetail := 'remote has unmerged commits; deferring trim';
       Exit;
@@ -167,8 +170,8 @@ begin
   EnsureIdentity(AGit);
   commits := TStringList.Create;
   try
-    commits.Text := AGit.GitQuiet(['rev-list', '--first-parent', '--reverse',
-      base + '..HEAD']).StdOut;
+    commits.Text := AGit.GitQuiet(['rev-list', '--first-parent',
+      '--reverse', base + '..HEAD']).StdOut;
     prev := snap;
     for i := 0 to commits.Count - 1 do
     begin
@@ -300,8 +303,8 @@ begin
     ADetail := 'invalid tag name: ' + ALabel;
     Exit;
   end;
-  if AGit.GitQuiet(['rev-parse', '--verify', '--quiet',
-    'refs/tags/' + ALabel]).Ok then
+  if AGit.GitQuiet(['rev-parse', '--verify', '--quiet', 'refs/tags/' +
+    ALabel]).Ok then
   begin
     ADetail := 'a tag named "' + ALabel + '" already exists';
     Exit;
@@ -322,7 +325,8 @@ begin
   Result := True;
 end;
 
-function SquashBetweenTags(AGit: TGitRunner; out ADetail: string): Boolean;
+function SquashBetweenTags(AGit: TGitRunner; out ADetail: string;
+  const ABranch: string = 'main'): Boolean;
 var
   r: TGitResult;
   labels, raw: TStringList;
@@ -332,8 +336,8 @@ begin
   Result := False;
   ADetail := '';
   // never rewrite while behind unmerged remote commits (would clobber them)
-  if AGit.GitQuiet(['rev-parse', '--verify', 'origin/main']).Ok then
-    if AGit.CountRange('HEAD..origin/main') > 0 then
+  if AGit.GitQuiet(['rev-parse', '--verify', 'origin/' + ABranch]).Ok then
+    if AGit.CountRange('HEAD..origin/' + ABranch) > 0 then
     begin
       ADetail := 'remote has unmerged commits; sync first, then squash';
       Exit;
