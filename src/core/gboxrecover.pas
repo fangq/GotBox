@@ -76,7 +76,13 @@ begin
         if ((sr.Attr and faDirectory) <> 0) and ((sr.Attr and faSymLink) = 0) then
           DeleteTree(full)
         else
+        begin
+          // git objects are read-only; Windows DeleteFile refuses those, which
+          // would strand a .git.corrupt-* backup in the tree (and an auto-synced
+          // repo would then commit it). Clear the attribute first (no-op on Unix).
+          FileSetAttr(full, FileGetAttr(full) and not faReadOnly);
           DeleteFile(full);
+        end;
       until FindNext(sr) <> 0;
     finally
       SysUtils.FindClose(sr);

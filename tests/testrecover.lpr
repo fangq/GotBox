@@ -93,7 +93,7 @@ var
   { Delete every loose object -> fsck fails (missing/corrupt object store). }
   procedure CorruptObjects(const ARepo: string);
   var
-    objRoot, sub: string;
+    objRoot, sub, fp: string;
     d, f: TSearchRec;
   begin
     objRoot := IncludeTrailingPathDelimiter(ARepo) + '.git' + PathDelim + 'objects';
@@ -111,9 +111,12 @@ var
           try
             repeat
               if (f.Attr and faDirectory) <> 0 then Continue;
-              // git makes objects read-only, but unlink only needs a writable
-              // parent dir (which we own), so DeleteFile succeeds
-              DeleteFile(IncludeTrailingPathDelimiter(sub) + f.Name);
+              // git makes loose objects read-only. On Unix unlink only needs a
+              // writable parent dir, but Windows DeleteFile refuses a read-only
+              // file, so clear the attribute first (harmless on Unix).
+              fp := IncludeTrailingPathDelimiter(sub) + f.Name;
+              FileSetAttr(fp, FileGetAttr(fp) and not faReadOnly);
+              DeleteFile(fp);
             until FindNext(f) <> 0;
           finally
             FindClose(f);
