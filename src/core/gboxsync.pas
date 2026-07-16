@@ -555,6 +555,27 @@ begin
 
   AGit.SweepStaleIndexLock;   // clear a lock left by a killed op before merging
 
+  // 0. self-heal a detached HEAD. A managed submodule is the user's to commit in,
+  // but a detached HEAD (e.g. one left by `git submodule update`) means their
+  // commits land on a nameless ref and neither `git push` nor our push (both push
+  // the current branch) ever publish them. Re-attach to ABranch, but ONLY when
+  // doing so can't discard a commit: when ABranch doesn't exist yet, or when it is
+  // an ancestor of HEAD (so moving it to HEAD is a pure fast-forward of the branch
+  // pointer). `checkout -B` to the commit we are already on leaves the working
+  // tree -- and any uncommitted edits -- untouched. If ABranch has diverged from
+  // HEAD, leave it detached for manual resolution rather than rewrite the branch.
+  if not AGit.GitQuiet(['symbolic-ref', '-q', 'HEAD']).Ok then
+  begin
+    if (not AGit.GitQuiet(['rev-parse', '--verify', '--quiet',
+      'refs/heads/' + ABranch]).Ok) or
+      AGit.GitQuiet(['merge-base', '--is-ancestor', ABranch, 'HEAD']).Ok then
+    begin
+      AGit.Git(['checkout', '-B', ABranch]);
+      if Assigned(Log) then
+        Log.Info('sync', 'managed: re-attached detached HEAD to ' + ABranch);
+    end;
+  end;
+
   // 1. fetch (same offline / not-found classification as RunSyncCycle, but we
   // never commit local work here -- managed repos are the user's to commit)
   r := AGit.Fetch;

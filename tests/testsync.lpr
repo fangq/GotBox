@@ -115,6 +115,7 @@ var
   outcome: TSyncOutcome;
   f: TStringList;
   mgdBare, mDir: string;
+  m2Bare, m2Dir, xSha: string;
 begin
   Randomize;
   base := IncludeTrailingPathDelimiter(GetTempDir) + 'gotbox-sync-' +
@@ -234,6 +235,56 @@ begin
       'managed: manual commit is pushed (' + SyncOutcomeText(outcome) + ')');
     Check(RemoteHasFile(mgdBare, 'new.txt'),
       'managed: manual commit reached the remote');
+
+    // (c) self-heal: a commit made on a DETACHED HEAD (ahead of main) must be
+    //     re-attached to main and pushed -- otherwise it would never publish.
+    git.Git(['checkout', '--detach']);        // detach at the current commit
+    WriteFile(IncludeTrailingPathDelimiter(mDir) + 'detached.txt', ['detached-work']);
+    git.Git(['add', 'detached.txt']);
+    git.Git(['commit', '-m', 'work on detached HEAD']);
+    Check(not git.GitQuiet(['symbolic-ref', '-q', 'HEAD']).Ok,
+      'managed: HEAD is detached before self-heal');
+    outcome := RunManagedCycle(git, detail, nil);
+    Check(git.GitQuiet(['symbolic-ref', '-q', 'HEAD']).Ok,
+      'managed: self-heal re-attached HEAD to a branch');
+    Check(Trim(git.Git(['rev-parse', '--abbrev-ref', 'HEAD']).StdOut) = 'main',
+      'managed: re-attached specifically to main');
+    Check(outcome = soPushed,
+      'managed: re-attached commit is pushed (' + SyncOutcomeText(outcome) + ')');
+    Check(RemoteHasFile(mgdBare, 'detached.txt'),
+      'managed: the detached-HEAD commit reached the remote');
+  finally
+    git.Free;
+  end;
+
+  // (d) self-heal must NOT re-attach when main has DIVERGED from the detached
+  //     HEAD -- moving main there would discard main's commit. Leave it detached.
+  m2Bare := IncludeTrailingPathDelimiter(base) + 'mgd2.git';
+  m2Dir := IncludeTrailingPathDelimiter(base) + 'M2';
+  ForceDirectories(m2Bare);
+  with TGitRunner.Create(m2Bare) do
+    try Git(['init', '--bare', '-b', 'main']); finally Free; end;
+  with TGitRunner.Create('') do
+    try Clone(m2Bare, m2Dir); finally Free; end;
+  SetIdentity(m2Dir, 'mgr2');
+  git := TGitRunner.Create(m2Dir);
+  try
+    WriteFile(IncludeTrailingPathDelimiter(m2Dir) + 'seed.txt', ['seed']);
+    git.Git(['add', '-A']); git.Git(['commit', '-m', 'seed']);
+    git.Git(['push', 'origin', 'main']);
+    // main gets commit X ...
+    WriteFile(IncludeTrailingPathDelimiter(m2Dir) + 'onmain.txt', ['x']);
+    git.Git(['add', '-A']); git.Git(['commit', '-m', 'X on main']);
+    xSha := Trim(git.Git(['rev-parse', 'main']).StdOut);
+    // ... while a detached HEAD off the seed gets a divergent commit Y
+    git.Git(['checkout', '--detach', 'main~1']);
+    WriteFile(IncludeTrailingPathDelimiter(m2Dir) + 'diverged.txt', ['y']);
+    git.Git(['add', '-A']); git.Git(['commit', '-m', 'Y on detached']);
+    outcome := RunManagedCycle(git, detail, nil);
+    Check(not git.GitQuiet(['symbolic-ref', '-q', 'HEAD']).Ok,
+      'managed: divergent detached HEAD is left detached (not re-attached)');
+    Check(Trim(git.Git(['rev-parse', 'main']).StdOut) = xSha,
+      'managed: main was not moved -- no commit discarded');
   finally
     git.Free;
   end;
