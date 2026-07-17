@@ -1,56 +1,75 @@
 object LoginForm: TLoginForm
   Left = 0
-  Height = 230
+  Height = 300
   Top = 0
   Width = 420
   BorderStyle = bsDialog
   Caption = 'GotBox - GitHub account'
-  ClientHeight = 230
+  ClientHeight = 300
   ClientWidth = 420
   Position = poScreenCenter
   LCLVersion = '4.2.0.0'
+  object btnDevice: TButton
+    Left = 24
+    Height = 34
+    Top = 20
+    Width = 372
+    Caption = 'Sign in with GitHub'
+    OnClick = btnDeviceClick
+    TabOrder = 0
+  end
+  object lblOr: TLabel
+    Left = 24
+    Height = 16
+    Top = 64
+    Width = 372
+    Alignment = taCenter
+    AutoSize = False
+    Caption = '— or sign in with a Personal Access Token —'
+  end
   object lblUser: TLabel
     Left = 24
     Height = 16
-    Top = 24
+    Top = 92
     Width = 110
     Caption = 'GitHub username'
   end
   object eUser: TEdit
     Left = 24
     Height = 28
-    Top = 44
+    Top = 112
     Width = 372
-    TabOrder = 0
+    TabOrder = 1
   end
   object lblPat: TLabel
     Left = 24
     Height = 16
-    Top = 84
+    Top = 150
     Width = 160
     Caption = 'Personal Access Token'
   end
   object ePat: TEdit
     Left = 24
     Height = 28
-    Top = 104
+    Top = 170
     Width = 372
     EchoMode = emPassword
     PasswordChar = '*'
-    TabOrder = 1
+    TabOrder = 2
   end
   object lblHint: TLabel
     Left = 24
     Height = 16
-    Top = 140
-    Width = 230
+    Top = 206
+    Width = 372
+    AutoSize = False
     Caption = 'Token needs the "repo" scope.'
   end
   object lnkToken: TLabel
     Cursor = crHandPoint
     Left = 24
     Height = 16
-    Top = 160
+    Top = 226
     Width = 180
     Caption = 'Create a token on GitHub...'
     Font.Color = clBlue
@@ -61,21 +80,21 @@ object LoginForm: TLoginForm
   object btnValidate: TButton
     Left = 200
     Height = 32
-    Top = 188
+    Top = 258
     Width = 130
     Caption = 'Validate && Save'
     Default = True
     OnClick = btnValidateClick
-    TabOrder = 2
+    TabOrder = 3
   end
   object btnCancel: TButton
     Left = 338
     Height = 32
-    Top = 188
+    Top = 258
     Width = 58
     Cancel = True
     Caption = 'Cancel'
     ModalResult = 2
-    TabOrder = 3
+    TabOrder = 4
   end
 end

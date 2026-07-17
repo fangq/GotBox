@@ -34,6 +34,7 @@ GotBoxFinder.appex/
 /tests/testgit
 /tests/testauth
 /tests/testcred
+/tests/testoauth
 /tests/testlink
 /tests/testworker
 /tests/testsync

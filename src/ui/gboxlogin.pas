@@ -27,10 +27,13 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, StdCtrls, Dialogs, LCLIntf, Graphics,
-  gboxconfigstore, gboxcredstore, gboxgithubapi, gboxlog, gboxmsg;
+  Clipbrd, gboxconfigstore, gboxcredstore, gboxgithubapi, gboxoauth, gboxlog,
+  gboxmsg;
 
 type
   TLoginForm = class(TForm)
+    btnDevice: TButton;
+    lblOr: TLabel;
     lblUser: TLabel;
     eUser: TEdit;
     lblPat: TLabel;
@@ -39,10 +42,12 @@ type
     lnkToken: TLabel;
     btnValidate: TButton;
     btnCancel: TButton;
+    procedure btnDeviceClick(Sender: TObject);
     procedure btnValidateClick(Sender: TObject);
     procedure lnkTokenClick(Sender: TObject);
   private
     FToken: string;
+    procedure SetBusy(ABusy: Boolean);
   public
     { Shows the modal login dialog. On OK, writes username into ACfg and keeps
       the entered token in FToken (for the caller to hand to the credential
@@ -56,7 +61,10 @@ var
 
 implementation
 
-{$R *.lfm}
+uses
+  DateUtils;
+
+  {$R *.lfm}
 
 type
   { Runs the blocking GitHub token validation + keyring store off the GUI thread,
@@ -103,6 +111,177 @@ begin
     FSaved := cred.SaveToken(FLogin, FToken);
   finally
     cred.Free;
+  end;
+end;
+
+type
+  { Polls the GitHub device-flow token endpoint off the GUI thread until the user
+    authorizes (or it is denied/expires), then validates the token and stores it.
+    The GUI pumps the message loop while this runs. }
+  TDeviceThread = class(TThread)
+  private
+    FClientId, FDeviceCode: string;
+    FInterval, FExpiresIn: Integer;
+    FToken, FLogin, FErr: string;
+    FStatus: TPollStatus;
+    FSaved: Boolean;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const AClientId: string; const ADev: TDeviceCode);
+    property Status: TPollStatus read FStatus;
+    property Token: string read FToken;
+    property Login: string read FLogin;
+    property Err: string read FErr;
+    property Saved: Boolean read FSaved;
+  end;
+
+constructor TDeviceThread.Create(const AClientId: string; const ADev: TDeviceCode);
+begin
+  FClientId := AClientId;
+  FDeviceCode := ADev.DeviceCode;
+  FInterval := ADev.Interval;
+  FExpiresIn := ADev.ExpiresIn;
+  FStatus := psError;
+  FreeOnTerminate := False;
+  inherited Create(False);
+end;
+
+procedure TDeviceThread.Execute;
+var
+  api: TGitHubApi;
+  cred: TCredStore;
+  started: TDateTime;
+  tok, perr: string;
+  st: TPollStatus;
+begin
+  started := Now;
+  // poll no faster than the server's interval; give the user time to authorize
+  repeat
+    Sleep(FInterval * 1000);
+    if Terminated then Exit;
+    if SecondsBetween(Now, started) > FExpiresIn then
+    begin
+      FStatus := psExpired;
+      Exit;
+    end;
+    if not PollForToken(FClientId, FDeviceCode, tok, st, perr) then
+    begin
+      FErr := perr;
+      FStatus := psError;
+      Exit;
+    end;
+    case st of
+      psPending: ;                 // not yet -- keep waiting
+      psSlowDown: Inc(FInterval, 5);
+      psSuccess:
+      begin
+        FToken := tok;
+        Break;
+      end
+      else
+      begin
+        FStatus := st;
+        FErr := perr;
+        Exit;
+      end;
+    end;
+  until False;
+
+  // authorized: confirm the token and learn the canonical login, then store it
+  api := TGitHubApi.Create(FToken);
+  try
+    if not api.ValidateToken(FLogin, FErr) then
+    begin
+      FStatus := psError;
+      Exit;
+    end;
+  finally
+    api.Free;
+  end;
+  cred := TCredStore.Create;
+  try
+    FSaved := cred.SaveToken(FLogin, FToken);
+  finally
+    cred.Free;
+  end;
+  FStatus := psSuccess;
+end;
+
+procedure TLoginForm.SetBusy(ABusy: Boolean);
+begin
+  if ABusy then Screen.Cursor := crHourGlass
+  else
+    Screen.Cursor := crDefault;
+  btnDevice.Enabled := not ABusy;
+  btnValidate.Enabled := not ABusy;
+  btnCancel.Enabled := not ABusy;
+end;
+
+procedure TLoginForm.btnDeviceClick(Sender: TObject);
+var
+  dev: TDeviceCode;
+  th: TDeviceThread;
+  err, login, tok: string;
+  status: TPollStatus;
+  saved: Boolean;
+begin
+  if not OAuthAvailable then Exit;
+
+  // 1. start the device authorization (one quick request)
+  SetBusy(True);
+  try
+    if not RequestDeviceCode(OAuthClientId, dev, err) then
+    begin
+      MsgError('Could not start GitHub sign-in:' + LineEnding + err);
+      Exit;
+    end;
+  finally
+    SetBusy(False);
+  end;
+
+  // 2. show the user code, copy it, and open the verification page
+  Clipboard.AsText := dev.UserCode;
+  lblHint.Caption := 'Enter code ' + dev.UserCode + ' at ' +
+    dev.VerificationUri + ' (copied to clipboard)';
+  lblHint.Update;
+  OpenURL(dev.VerificationUri);
+
+  // 3. poll on a worker thread while pumping the GUI
+  SetBusy(True);
+  th := TDeviceThread.Create(OAuthClientId, dev);
+  try
+    while not th.Finished do
+    begin
+      Application.ProcessMessages;
+      CheckSynchronize(50);
+      Sleep(10);
+    end;
+    th.WaitFor;
+    status := th.Status;
+    login := th.Login;
+    tok := th.Token;
+    saved := th.Saved;
+    err := th.Err;
+  finally
+    th.Free;
+    SetBusy(False);
+  end;
+
+  case status of
+    psSuccess:
+    begin
+      eUser.Text := login;
+      FToken := tok;
+      if not saved then
+        MsgError('Signed in, but the token could not be saved to the credential store.');
+      if Assigned(Log) then Log.Info('login', 'device-flow sign-in for ' + login);
+      ModalResult := mrOK;
+    end;
+    psDenied: MsgError('Authorization was denied on GitHub.');
+    psExpired: MsgError('The sign-in code expired. Please try again.');
+    else
+      MsgError('GitHub sign-in did not complete:' + LineEnding + err);
   end;
 end;
 
@@ -173,6 +352,10 @@ begin
   FToken := '';
   eUser.Text := ACfg.GithubUser;
   ePat.Text := '';
+  // device-flow sign-in only when a client id is configured; otherwise the form
+  // is the plain manual-PAT dialog
+  btnDevice.Visible := OAuthAvailable;
+  lblOr.Visible := OAuthAvailable;
   CenterForm(Self);
   Result := ShowModal = mrOK;
   if Result then

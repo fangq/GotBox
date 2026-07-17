@@ -161,23 +161,32 @@ See [Building from source](#building-from-source).
 
 ## Getting started
 
-### 1. Create a GitHub token
+### 1. Connect your GitHub account
 
-GotBox needs a Personal Access Token so it can create and push to private repos
-on your behalf.
+The **Account** window offers two ways to sign in:
 
-1. Go to **GitHub → Settings → Developer settings → Personal access tokens**.
-   (GotBox's **Account** window has a direct link.)
-2. Create a **classic** token with the **`repo`** scope (this allows creating and
-   pushing private repositories).
-3. Copy the token — you'll paste it into GotBox once.
+- **Sign in with GitHub (recommended).** Click it and GotBox shows a short code
+  (e.g. `WDJB-MJHT`) and opens `github.com/login/device`; enter the code, click
+  **Authorize**, and GotBox receives and stores a token for you — no token to
+  create or copy. (Uses GitHub's OAuth *device flow*; the token is saved to your
+  OS keychain like any other.)
+  - *One-time app install:* the first time, GitHub asks you to install the GotBox
+    app on your account — choose **All repositories** so GotBox can create and
+    sync your private repos.
+- **Personal Access Token (fallback).** Prefer a token, or on a self-hosted / no
+  OAuth setup? Create a **classic** token with the **`repo`** scope (GitHub →
+  Settings → Developer settings → Personal access tokens — the Account window has
+  a direct link), and paste it in.
+
+> Self-hosted **SSH** backend users skip all of this — that backend uses your SSH
+> keys, no token.
 
 ### 2. First launch
 
 Start GotBox; it appears in your system tray. On first run it will:
 
-1. Ask for your **GitHub username and token** (Account window) — paste the token;
-   it's validated and saved to your OS keychain.
+1. Ask you to **connect your GitHub account** (Account window) — sign in with the
+   code, or paste a token; it's validated and saved to your OS keychain.
 2. Confirm the **sync folder** (defaults to `~/GotBox`, created for you). Change
    it in **Settings** if you like.
 
