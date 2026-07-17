@@ -33,6 +33,7 @@ GotBoxFinder.appex/
 # console test binaries + their build dir
 /tests/testgit
 /tests/testauth
+/tests/testcred
 /tests/testlink
 /tests/testworker
 /tests/testsync

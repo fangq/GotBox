@@ -24,11 +24,19 @@ unit gboxcredstore;
     macOS  -> security (Keychain)
     Windows-> DPAPI (CryptProtectData) ciphertext in a per-user file
 
-  The token blob is stored in a small file in the config dir (user<TAB>base64).
-  On Windows the blob is DPAPI-encrypted to the current user, so only that user
-  on that machine can decrypt it. On platforms without a secret-tool/Keychain
-  CLI, the file falls back to light XOR obfuscation (not strong crypto). The
-  token is never written to config.json. }
+  The token blob is stored in a small file in the config dir
+  (user<TAB>scheme<TAB>base64). On Windows the blob is DPAPI-encrypted to the
+  current user, so only that user on that machine can decrypt it. On platforms
+  without a secret-tool/Keychain CLI, the file is encrypted with a keystream
+  derived from a stable machine secret (e.g. /etc/machine-id) plus the username,
+  so a copied/backed-up cred.dat is useless on another machine or to another
+  user; the file is also locked to 0600. This is not a substitute for a real OS
+  keychain (an attacker running as the same user on the same box can re-derive the
+  key), so GotBox still warns and recommends installing libsecret/gnome-keyring.
+  The token is never written to config.json.
+
+  Set GOTBOX_FORCE_CRED_FALLBACK=1 to bypass the OS keychain and always use the
+  file backend (useful on headless boxes and for tests). }
 
 {$mode objfpc}{$H+}
 
@@ -58,7 +66,8 @@ implementation
 
 uses
   {$IFDEF UNIX}BaseUnix,{$ENDIF}
-  Classes, SysUtils, Process, base64, gboxconfigstore, gboxlog;
+  {$IFDEF DARWIN}StrUtils,{$ENDIF}
+  Classes, SysUtils, Process, base64, sha1, gboxconfigstore, gboxlog;
 
 type
   TStringArray = array of string;   // secret-tool env override list
@@ -68,8 +77,7 @@ type
   environment with those names overridden/added; otherwise it inherits ours.
   Returns exit code; AOut receives stdout. }
 function RunCaptureEnv(const AExe: string; const AArgs: array of string;
-  const AInput: string; out AOut: string;
-  const AEnvOverride: array of string): Integer;
+  const AInput: string; out AOut: string; const AEnvOverride: array of string): Integer;
 var
   proc: TProcess;
   outStream: TStringStream;
@@ -158,6 +166,12 @@ begin
   Result := FileSearch(AName, GetEnvironmentVariable('PATH'));
 end;
 
+{ Bypass the OS keychain and use the file backend (headless boxes / tests). }
+function CredFallbackForced: Boolean;
+begin
+  Result := GetEnvironmentVariable('GOTBOX_FORCE_CRED_FALLBACK') <> '';
+end;
+
 {$IFDEF LINUX}
 { The systemd per-user D-Bus session bus (unix:path=/run/user/<uid>/bus), where
   gnome-keyring / the Secret Service registers. Over x2go/NX (and other
@@ -217,7 +231,7 @@ var
   rc: Integer;
 begin
   {$IFDEF LINUX}
-  if WhichExe('secret-tool') <> '' then
+  if (not CredFallbackForced) and (WhichExe('secret-tool') <> '') then
   begin
     rc := SecretTool(
       ['store', '--label=GotBox', 'service', ServiceName, 'account', AUser],
@@ -227,7 +241,7 @@ begin
   end;
   {$ENDIF}
   {$IFDEF DARWIN}
-  if WhichExe('security') <> '' then
+  if (not CredFallbackForced) and (WhichExe('security') <> '') then
   begin
     rc := RunCapture('security',
       ['add-generic-password', '-a', AUser, '-s', ServiceName, '-w', AToken, '-U'],
@@ -246,7 +260,7 @@ var
 begin
   AToken := '';
   {$IFDEF LINUX}
-  if WhichExe('secret-tool') <> '' then
+  if (not CredFallbackForced) and (WhichExe('secret-tool') <> '') then
   begin
     rc := SecretTool(
       ['lookup', 'service', ServiceName, 'account', AUser], '', outp);
@@ -258,7 +272,7 @@ begin
   end;
   {$ENDIF}
   {$IFDEF DARWIN}
-  if WhichExe('security') <> '' then
+  if (not CredFallbackForced) and (WhichExe('security') <> '') then
   begin
     rc := RunCapture('security',
       ['find-generic-password', '-a', AUser, '-s', ServiceName, '-w'], '', outp);
@@ -277,23 +291,24 @@ var
   outp: string;
 begin
   {$IFDEF LINUX}
-  if WhichExe('secret-tool') <> '' then
+  if (not CredFallbackForced) and (WhichExe('secret-tool') <> '') then
     SecretTool(['clear', 'service', ServiceName, 'account', AUser], '', outp);
   {$ENDIF}
   {$IFDEF DARWIN}
-  if WhichExe('security') <> '' then
+  if (not CredFallbackForced) and (WhichExe('security') <> '') then
     RunCapture('security', ['delete-generic-password', '-a', AUser, '-s', ServiceName], '', outp);
   {$ENDIF}
   Result := DeleteFallback;
 end;
 
-{ ---- file fallback (obfuscated; not strong crypto) ---- }
+{ ---- file fallback (DPAPI on Windows; machine-bound keystream elsewhere) ---- }
 
 function TCredStore.FallbackFile: string;
 begin
   Result := IncludeTrailingPathDelimiter(GotConfigDir) + 'cred.dat';
 end;
 
+{ Legacy fixed-key obfuscation -- kept ONLY to read/upgrade old cred.dat files. }
 function XorObfuscate(const S: string): string;
 const
   KEY: array[0..7] of Byte = ($67, $6F, $74, $62, $6F, $78, $21, $5A); // 'gotbox!Z'
@@ -303,6 +318,100 @@ begin
   SetLength(Result, Length(S));
   for i := 1 to Length(S) do
     Result[i] := Chr(Ord(S[i]) xor KEY[(i - 1) mod Length(KEY)]);
+end;
+
+function ReadFirstLine(const APath: string): string;
+var
+  sl: TStringList;
+begin
+  Result := '';
+  if not FileExists(APath) then Exit;
+  sl := TStringList.Create;
+  try
+    try
+      sl.LoadFromFile(APath);
+      if sl.Count > 0 then Result := Trim(sl[0]);
+    except
+    end;
+  finally
+    sl.Free;
+  end;
+end;
+
+{ A stable per-machine secret: /etc/machine-id (Linux), the hardware UUID
+  (macOS), else a hostname+uid fallback. Binds the fallback key to this machine
+  so a copied cred.dat can't be decrypted elsewhere. }
+function MachineSecret: string;
+  {$IFDEF DARWIN}
+var
+  outp: string;
+  a, b, e: Integer;
+  {$ENDIF}
+begin
+  Result := '';
+  {$IFDEF LINUX}
+  Result := ReadFirstLine('/etc/machine-id');
+  if Result = '' then Result := ReadFirstLine('/var/lib/dbus/machine-id');
+  {$ENDIF}
+  {$IFDEF DARWIN}
+  if RunCapture('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], '', outp) = 0 then
+  begin
+    a := Pos('IOPlatformUUID', outp);
+    if a > 0 then
+    begin
+      b := PosEx('= "', outp, a);
+      if b > 0 then
+      begin
+        b := b + 3;
+        e := PosEx('"', outp, b);
+        if e > b then Result := Copy(outp, b, e - b);
+      end;
+    end;
+  end;
+  {$ENDIF}
+  if Result = '' then
+  {$IFDEF UNIX}
+    Result := 'host:' + GetEnvironmentVariable('HOSTNAME') + ':uid:' +
+      IntToStr(FpGetuid);
+    {$ELSE}
+    Result := 'host:' + GetEnvironmentVariable('COMPUTERNAME');
+  {$ENDIF}
+end;
+
+{ A keystream of ALen bytes from ASeed via chained SHA-1 blocks (enough to mask a
+  PAT -- this is at-rest obfuscation keyed to the machine, not authenticated
+  encryption). }
+function KeyStream(const ASeed: string; ALen: Integer): TBytes;
+var
+  d: TSHA1Digest;
+  blk, i, o: Integer;
+begin
+  SetLength(Result, ALen);
+  o := 0;
+  blk := 0;
+  while o < ALen do
+  begin
+    d := SHA1String(ASeed + '#' + IntToStr(blk));
+    for i := 0 to High(d) do
+    begin
+      if o >= ALen then Break;
+      Result[o] := d[i];
+      Inc(o);
+    end;
+    Inc(blk);
+  end;
+end;
+
+{ XOR S with a machine+user keystream (symmetric). }
+function MKeyXor(const S, ASeed: string): string;
+var
+  ks: TBytes;
+  i: Integer;
+begin
+  ks := KeyStream(ASeed, Length(S));
+  SetLength(Result, Length(S));
+  for i := 1 to Length(S) do
+    Result[i] := Chr(Ord(S[i]) xor ks[i - 1]);
 end;
 
 {$IFDEF WINDOWS}
@@ -358,44 +467,64 @@ begin
 end;
 {$ENDIF}
 
-{ Encrypt/decrypt the token bytes for at-rest storage: DPAPI on Windows,
-  light XOR obfuscation elsewhere. }
-function ProtectData(const S: string): string;
+{ Protect the token bytes for at-rest storage and report the scheme used:
+  'dpapi' on Windows, else 'mkey' (machine+user keystream). ASeed binds the mkey
+  scheme to this machine and user. }
+function ProtectToken(const AToken, ASeed: string; out AScheme: string): string;
 begin
   {$IFDEF WINDOWS}
-  Result := DpapiRun(S, True);
+  AScheme := 'dpapi';
+  Result := DpapiRun(AToken, True);
   {$ELSE}
-  Result := XorObfuscate(S);
+  AScheme := 'mkey';
+  Result := MKeyXor(AToken, ASeed);
   {$ENDIF}
 end;
 
-function UnprotectData(const S: string): string;
+{ Reverse ProtectToken for the recorded scheme; 'xor' is the legacy fixed-key
+  format, decoded only so an old file can be read and upgraded. }
+function UnprotectToken(const AData, ASeed, AScheme: string): string;
 begin
-  {$IFDEF WINDOWS}
-  Result := DpapiRun(S, False);
-  {$ELSE}
-  Result := XorObfuscate(S);
-  {$ENDIF}
+  if AScheme = 'dpapi' then
+  begin
+    {$IFDEF WINDOWS}
+    Result := DpapiRun(AData, False);
+    {$ELSE}
+    Result := '';   // a Windows-written file on a non-Windows host: unreadable
+    {$ENDIF}
+  end
+  else if AScheme = 'mkey' then
+    Result := MKeyXor(AData, ASeed)
+  else
+    Result := XorObfuscate(AData);   // legacy 'xor'
 end;
 
 function TCredStore.SaveFallback(const AUser, AToken: string): Boolean;
 var
   f: TStringList;
+  scheme, blob, path: string;
 begin
   Result := False;
   try
+    scheme := '';
+    blob := ProtectToken(AToken, MachineSecret + '|' + AUser, scheme);
     f := TStringList.Create;
     try
-      // store as user<TAB>base64(protected(token))
-      f.Add(AUser + #9 + EncodeStringBase64(ProtectData(AToken)));
-      f.SaveToFile(FallbackFile);
+      // user<TAB>scheme<TAB>base64(protected(token))
+      f.Add(AUser + #9 + scheme + #9 + EncodeStringBase64(blob));
+      path := FallbackFile;
+      f.SaveToFile(path);
+      {$IFDEF UNIX}
+      FpChmod(path, &600);   // owner-only rw
+      {$ENDIF}
       Result := True;
       if Assigned(Log) then
-      {$IFDEF WINDOWS}
-        Log.Info('cred', 'token saved (DPAPI-encrypted file)');
-        {$ELSE}
-        Log.Warn('cred', 'token saved to obfuscated file (no OS secret store)');
-      {$ENDIF}
+        if scheme = 'dpapi' then
+          Log.Info('cred', 'token saved (DPAPI-encrypted file)')
+        else
+          Log.Warn('cred', 'no OS keychain; token saved to a machine-bound ' +
+            'encrypted file (' + path + '). Install libsecret/gnome-keyring for ' +
+            'stronger protection.');
     finally
       f.Free;
     end;
@@ -408,8 +537,9 @@ end;
 function TCredStore.LoadFallback(const AUser: string; out AToken: string): Boolean;
 var
   f: TStringList;
-  line, u, enc: string;
+  line, u, scheme, enc, seed: string;
   p, i: Integer;
+  legacy: Boolean;
 begin
   Result := False;
   AToken := '';
@@ -423,12 +553,27 @@ begin
       p := Pos(#9, line);
       if p <= 0 then Continue;
       u := Copy(line, 1, p - 1);
-      enc := Copy(line, p + 1, MaxInt);
-      if SameText(u, AUser) then
+      if not SameText(u, AUser) then Continue;
+      line := Copy(line, p + 1, MaxInt);   // remainder after the user field
+      p := Pos(#9, line);
+      if p > 0 then                        // new format: scheme<TAB>base64
       begin
-        AToken := UnprotectData(DecodeStringBase64(enc));
-        Exit(AToken <> '');
+        scheme := Copy(line, 1, p - 1);
+        enc := Copy(line, p + 1, MaxInt);
+        legacy := False;
+      end
+      else                                 // legacy format: base64 (fixed-XOR)
+      begin
+        scheme := 'xor';
+        enc := line;
+        legacy := True;
       end;
+      seed := MachineSecret + '|' + AUser;
+      AToken := UnprotectToken(DecodeStringBase64(enc), seed, scheme);
+      Result := AToken <> '';
+      // transparently upgrade a legacy weak-XOR file to the machine-bound scheme
+      if Result and legacy then SaveFallback(AUser, AToken);
+      Exit;
     end;
   finally
     f.Free;
