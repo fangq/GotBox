@@ -376,6 +376,45 @@ var
       Check(Pos('small.txt', staged) > 0, 'A1: small file is staged');
       Check(Pos('big.bin', staged) = 0, 'A1: oversize file is NOT staged');
 
+      // The block must survive a re-scan. An excluded path no longer shows up in
+      // `git status`, so a scan that only looked there would come back empty,
+      // WriteExcludeBlock would drop the entry, and the next `git add -A` would
+      // commit the doomed blob -- exactly the case that lets a >100 MB file into
+      // history and makes every later push fail. Start from an empty set, as a
+      // freshly restarted daemon does.
+      blocked.Clear;
+      Check(FindOversizeUnhandled(git, 20, blocked) = 1,
+        'A1: re-scan still flags the already-excluded oversize file');
+      Check(blocked.IndexOf('big.bin') >= 0, 'A1: big.bin still flagged');
+      WriteExcludeBlock(git, blocked);
+      git.AddAll;
+      staged := git.GitQuiet(['ls-files', '--cached']).StdOut;
+      Check(Pos('big.bin', staged) = 0, 'A1: oversize file still NOT staged');
+
+      // ReadExcludeBlock reports what is blocked, across restarts
+      blocked.Clear;
+      Check(ReadExcludeBlock(git, blocked) = 1, 'A1: exclude block reads back');
+      Check(blocked.IndexOf('big.bin') >= 0, 'A1: block lists big.bin');
+
+      // a blocked file that shrank below the limit drops out of the set on the
+      // next scan (and out of the exclude block with it)
+      WriteBinary(IncludeTrailingPathDelimiter(dir) + 'big.bin', [1, 2, 3]);
+      blocked.Clear;
+      Check(FindOversizeUnhandled(git, 20, blocked) = 0,
+        'A1: a shrunk file is no longer flagged');
+      WriteExcludeBlock(git, blocked);
+      git.AddAll;
+      staged := git.GitQuiet(['ls-files', '--cached']).StdOut;
+      Check(Pos('big.bin', staged) > 0, 'A1: the shrunk file stages again');
+
+      // restore the oversize file for the final "block cleared" check
+      git.GitQuiet(['rm', '--cached', '-q', 'big.bin']);
+      WriteBinary(IncludeTrailingPathDelimiter(dir) + 'big.bin',
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
+      blocked.Clear;
+      Check(FindOversizeUnhandled(git, 20, blocked) = 1, 'A1: flagged again');
+      WriteExcludeBlock(git, blocked);
+
       // once cleared (e.g. git-lfs now available), the block is removed and the
       // file stages normally again
       blocked.Clear;

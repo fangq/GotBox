@@ -268,7 +268,7 @@ var
   conflicts, changed: TStringList;
   syncStart: TDateTime;
   delayMs, k: Integer;
-  contention: Boolean;
+  contention, lfsAbsorbs: Boolean;
 begin
   // A submodule whose working folder the user deleted: stop syncing it rather
   // than spinning on a missing directory (git would just fail every cycle). The
@@ -320,27 +320,37 @@ begin
           Log.Warn('worker', FName + ': git-lfs not installed; files over ' +
             '100 MB cannot be synced (install git-lfs)');
       end;
+      // When LFS can absorb oversized files, drop any block a previous run left
+      // behind *first*: an excluded path is invisible to `git status`, so the
+      // LFS scan below would miss it and the file would then stage as a raw
+      // (doomed) blob the moment the block went away.
+      lfsAbsorbs := FLfsOk and (FLfsThresholdMB > 0) and (FLfsThresholdMB <= 100);
+      if lfsAbsorbs then
+      begin
+        FOversize.Clear;
+        if ReadExcludeBlock(git, FOversize) > 0 then
+        begin
+          FOversize.Clear;
+          WriteExcludeBlock(git, FOversize);
+        end;
+        FOversizeNotified := False;
+      end;
+
       if (FLfsThresholdMB > 0) and FLfsOk then
         TrackLargeFiles(git, Int64(FLfsThresholdMB) * 1024 * 1024);
 
       // Guard GitHub's hard 100 MB per-file limit: any working-tree file at/over
       // it that LFS is NOT going to absorb is excluded from the commit (so we
       // never record a doomed blob that fails every push forever) and surfaced as
-      // a clear error below. When LFS will handle oversized files (installed +
-      // threshold in 1..100), clear any prior block so those files sync normally.
-      if FLfsOk and (FLfsThresholdMB > 0) and (FLfsThresholdMB <= 100) then
-      begin
-        if FOversize.Count > 0 then
-        begin
-          FOversize.Clear;
-          WriteExcludeBlock(git, FOversize);
-        end;
-        FOversizeNotified := False;
-      end
-      else
+      // a clear error below. The scan rebuilds the set every cycle -- including
+      // files it excluded on an earlier cycle or in an earlier run -- so the
+      // block neither self-erases nor keeps stale entries.
+      if not lfsAbsorbs then
       begin
         FindOversizeUnhandled(git, GITHUB_FILE_LIMIT, FOversize);
         WriteExcludeBlock(git, FOversize);
+        // nothing blocked any more: re-arm the notice for the next offender
+        if FOversize.Count = 0 then FOversizeNotified := False;
       end;
 
       outcome := RunSyncCycle(git, FMachine, detail, conflicts, changed, FBranch);

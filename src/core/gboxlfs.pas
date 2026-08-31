@@ -42,11 +42,16 @@ const
 { True if the `git lfs` command works (git-lfs is installed and on PATH). }
 function LfsAvailable(AGit: TGitRunner): Boolean;
 
-{ Append to AOut (deduplicated, repo-relative) each new/modified working-tree
-  file that is at/above AHardLimitBytes and NOT already LFS-tracked -- i.e. a
-  file that would be rejected on push and that Git LFS is not going to absorb.
-  Returns AOut's resulting count. Never removes entries (the caller keeps a
-  persistent blocked set). }
+{ Rebuild AOut (deduplicated, repo-relative) as the set of working-tree files
+  that are at/above AHardLimitBytes and NOT absorbed by Git LFS -- i.e. files
+  that would be rejected on push. AOut is cleared first, so an entry whose file
+  was since deleted, shrank, or became LFS-tracked drops out. Returns AOut's
+  resulting count.
+
+  Candidates come from `git status` *and* from the managed exclude block (see
+  WriteExcludeBlock): a file already listed there is invisible to `git status`,
+  so scanning status alone would forget it, erase its exclude entry, and let the
+  very next `git add -A` commit the doomed blob after all. }
 function FindOversizeUnhandled(AGit: TGitRunner; AHardLimitBytes: Int64;
   AOut: TStrings): Integer;
 
@@ -54,6 +59,11 @@ function FindOversizeUnhandled(AGit: TGitRunner; AHardLimitBytes: Int64;
   `git add -A` skips them and they are never committed as a doomed >100 MB blob).
   Removes the block when ABlocked is empty. Foreign lines are preserved. }
 procedure WriteExcludeBlock(AGit: TGitRunner; ABlocked: TStrings);
+
+{ Append to AOut (deduplicated, repo-relative) the paths currently listed in the
+  managed exclude block, i.e. what a previous WriteExcludeBlock recorded -- the
+  scan's memory of oversize files across restarts. Returns AOut's count. }
+function ReadExcludeBlock(AGit: TGitRunner; AOut: TStrings): Integer;
 
 { For each new/modified file in AGit's working tree that is >= AThresholdBytes
   and not already LFS-tracked, install the repo's LFS filters (once) and register
@@ -177,52 +187,113 @@ begin
   end;
 end;
 
+const
+  OVERSIZE_BEGIN = '# >>> gotbox: oversize files (need git-lfs, not synced) >>>';
+  OVERSIZE_END = '# <<< gotbox oversize <<<';
+
+{ Path of AGit's <git-dir>/info/exclude, or '' if the git dir can't be resolved. }
+function ExcludeFilePath(AGit: TGitRunner): string;
+var
+  gitDir: string;
+begin
+  Result := '';
+  gitDir := Trim(AGit.GitQuiet(['rev-parse', '--absolute-git-dir']).StdOut);
+  if gitDir = '' then Exit;
+  Result := IncludeTrailingPathDelimiter(gitDir) + 'info' + PathDelim + 'exclude';
+end;
+
+function ReadExcludeBlock(AGit: TGitRunner; AOut: TStrings): Integer;
+var
+  exclPath, rel: string;
+  excl: TStringList;
+  a, i: Integer;
+begin
+  Result := 0;
+  if AOut = nil then Exit;
+  Result := AOut.Count;
+  exclPath := ExcludeFilePath(AGit);
+  if (exclPath = '') or (not FileExists(exclPath)) then Exit;
+  excl := TStringList.Create;
+  try
+    excl.LoadFromFile(exclPath);
+    a := excl.IndexOf(OVERSIZE_BEGIN);
+    if a < 0 then Exit;
+    for i := a + 1 to excl.Count - 1 do
+    begin
+      if excl[i] = OVERSIZE_END then Break;
+      rel := Trim(excl[i]);
+      if (rel <> '') and (rel[1] = '/') then
+        Delete(rel, 1, 1);        // undo the anchoring '/' WriteExcludeBlock adds
+      if (rel <> '') and (AOut.IndexOf(rel) < 0) then AOut.Add(rel);
+    end;
+  finally
+    excl.Free;
+  end;
+  Result := AOut.Count;
+end;
+
 function FindOversizeUnhandled(AGit: TGitRunner; AHardLimitBytes: Int64;
   AOut: TStrings): Integer;
 var
   st: TGitResult;
-  lines: TStringList;
+  lines, cand: TStringList;
   i: Integer;
   rel, full: string;
 begin
   Result := 0;
   if AOut = nil then Exit;
-  st := AGit.GitQuiet(['status', '--porcelain', '--untracked-files=all']);
-  if st.Ok then
-  begin
-    lines := TStringList.Create;
-    try
-      lines.Text := st.StdOut;
-      for i := 0 to lines.Count - 1 do
-      begin
-        if Trim(lines[i]) = '' then Continue;
-        rel := StatusPath(lines[i]);
-        if rel = '' then Continue;
-        full := IncludeTrailingPathDelimiter(AGit.WorkDir) + rel;
-        if FileSizeBytes(full) < AHardLimitBytes then Continue;
-        if IsLfsTracked(AGit, rel) then Continue;    // LFS will absorb it
-        if AOut.IndexOf(rel) < 0 then AOut.Add(rel);
+  AOut.Clear;
+
+  cand := TStringList.Create;
+  try
+    cand.Sorted := True;
+    cand.Duplicates := dupIgnore;
+
+    // Files blocked on an earlier cycle (or by an earlier run of the daemon):
+    // the exclude entry hides them from `git status`, so they have to be seeded
+    // from our own record or the block would erase itself and re-admit them.
+    ReadExcludeBlock(AGit, cand);
+
+    st := AGit.GitQuiet(['status', '--porcelain', '--untracked-files=all']);
+    if st.Ok then
+    begin
+      lines := TStringList.Create;
+      try
+        lines.Text := st.StdOut;
+        for i := 0 to lines.Count - 1 do
+        begin
+          if Trim(lines[i]) = '' then Continue;
+          rel := StatusPath(lines[i]);
+          if rel <> '' then cand.Add(rel);
+        end;
+      finally
+        lines.Free;
       end;
-    finally
-      lines.Free;
     end;
+
+    // keep only those that are still too big for a plain push
+    for i := 0 to cand.Count - 1 do
+    begin
+      rel := cand[i];
+      full := IncludeTrailingPathDelimiter(AGit.WorkDir) + rel;
+      if FileSizeBytes(full) < AHardLimitBytes then Continue;  // gone or shrank
+      if IsLfsTracked(AGit, rel) then Continue;                // LFS will absorb it
+      if AOut.IndexOf(rel) < 0 then AOut.Add(rel);
+    end;
+  finally
+    cand.Free;
   end;
   Result := AOut.Count;
 end;
 
-const
-  OVERSIZE_BEGIN = '# >>> gotbox: oversize files (need git-lfs, not synced) >>>';
-  OVERSIZE_END = '# <<< gotbox oversize <<<';
-
 procedure WriteExcludeBlock(AGit: TGitRunner; ABlocked: TStrings);
 var
-  gitDir, exclPath: string;
+  exclPath: string;
   excl: TStringList;
   a, b, i: Integer;
 begin
-  gitDir := Trim(AGit.GitQuiet(['rev-parse', '--absolute-git-dir']).StdOut);
-  if gitDir = '' then Exit;
-  exclPath := IncludeTrailingPathDelimiter(gitDir) + 'info' + PathDelim + 'exclude';
+  exclPath := ExcludeFilePath(AGit);
+  if exclPath = '' then Exit;
   excl := TStringList.Create;
   try
     if FileExists(exclPath) then excl.LoadFromFile(exclPath);
