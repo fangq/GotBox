@@ -398,12 +398,40 @@ begin
         else
         begin
           Inc(FErrorStreak);
+          // A file over GitHub's 100 MB limit that is already recorded in a local
+          // commit makes the pre-receive hook reject every push of that commit,
+          // forever -- the size guard above only keeps new ones out. Rewrite the
+          // unpushed commits without it (the file itself is kept in the folder,
+          // untracked) so the repo can publish everything else again. The file
+          // stays flagged by the FOversize block below, which is what tells the
+          // user it isn't syncing.
+          if IsOversizeRejection(detail) and FAutoSync then
+          begin
+            FOversize.Clear;
+            if DropOversizeFromUnpushed(git, FBranch, FMachine, FOversize, td) then
+            begin
+              if Assigned(Log) then Log.Info('worker', FName + ': ' + td);
+              if Assigned(FOnNotice) then
+                FOnNotice('GotBox - unblocked ' + FName,
+                  'A file too large for GitHub was removed from the pending ' +
+                  'commits so the rest of ' + FName + ' can sync; the file is ' +
+                  'still in your folder: ' + FOversize[0]);
+              FOversizeNotified := True;   // the notice above says it all
+              FErrorStreak := 0;
+              FBackoffUntil := 0;
+              FStuckNotified := False;
+              detail := '';   // handled; the next cycle pushes the rewritten tip
+            end
+            else if Assigned(Log) then
+              Log.Warn('worker', FName + ': cannot drop the oversize commit: ' + td);
+          end;
+
           // A corrupt local object store won't heal by retrying. For an auto-sync
           // repo, rebuild it from origin in place (preserving uncommitted edits as
           // "(recovered ...)" copies); if that succeeds the repo is usable again,
           // so clear the error and let the next cycle sync normally. If recovery
           // can't run (offline / managed repo), surface a clear "re-clone" state.
-          if IsCorruptionError(detail) then
+          if (detail <> '') and IsCorruptionError(detail) then
           begin
             if FAutoSync and RecloneCorruptRepo(git, FBranch, FMachine, td, k) then
             begin

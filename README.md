@@ -352,7 +352,11 @@ needed); repos are created as bare repositories under that base.
   the cap and force-pushed, other machines detect the rewrite and reset to it
   *after* safely replaying any un-pushed local edits.
 - **Large files use Git LFS** automatically (when `git-lfs` is installed) so big
-  files sync instead of being rejected by GitHub's 100 MB limit.
+  files sync instead of being rejected by GitHub's 100 MB limit. Without
+  `git-lfs`, an oversize file is kept out of commits entirely; if one ever
+  reaches a commit anyway, the un-pushed history is rewritten without it rather
+  than leaving the folder permanently unable to push. Your copy of the file is
+  never deleted.
 
 ---
 
@@ -398,7 +402,10 @@ managing unless you pass `--takeover` (the GUI, by contrast, asks).
 - **Token rejected / can't create repos** — the token needs the **`repo`** scope
   (classic token). Re-enter it in **Account…**.
 - **Large file won't sync** — install `git-lfs` (large files at/above the LFS
-  threshold need it); without it those files are skipped.
+  threshold need it); without it those files are skipped and left in your folder.
+  If a file over 100 MB somehow got into a commit before it could be skipped,
+  GotBox rewrites that (not-yet-pushed) commit without it so the rest of the
+  folder keeps syncing — the file itself stays in your folder, untouched.
 - **Nothing syncs on a fresh machine** — make sure you signed in (Account) and
   the sync folder is set; GotBox clones the existing `.gotbox` once both are set.
 - **A folder shows as a broken "link" on GitHub** — that folder is itself a git

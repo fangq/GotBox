@@ -36,15 +36,24 @@ unit gboxrecover;
        healthy submodule checkout is preserved.
     5. Re-materialize any Git LFS content, then clean up.
 
-  Only meaningful for auto-synced repos; a "managed" repo (the user commits by
-  hand) is left for manual recovery so we never discard their unpushed commits. }
+  A second, unrelated recovery lives here because it is the same kind of job --
+  an automated repair of a repo state a normal cycle can never work its way out
+  of. When a file over GitHub's 100 MB limit has already been recorded in a local
+  commit, every push of that commit is rejected by the pre-receive hook, forever;
+  the size guard in gboxlfs only keeps *new* oversize files out of a commit and
+  cannot undo one that is already in history. DropOversizeFromUnpushed rewrites
+  the not-yet-pushed commits without the offending blobs (see its comment).
+
+  Both are only meaningful for auto-synced repos; a "managed" repo (the user
+  commits by hand) is left for manual recovery so we never discard or rewrite
+  their unpushed commits. }
 
 {$mode objfpc}{$H+}
 
 interface
 
 uses
-  Classes, SysUtils, gboxgitrunner;
+  Classes, SysUtils, gboxgitrunner, gboxlfs;
 
 { Rebuild AGit's (corrupt) working copy from origin, preserving uncommitted local
   edits as "(recovered ...)" copies. Returns True on a completed recovery, with
@@ -54,10 +63,36 @@ uses
 function RecloneCorruptRepo(AGit: TGitRunner; const ABranch, AMachine: string;
   out ADetail: string; out ARecovered: Integer): Boolean;
 
+{ True if AText is a push rejected because a file exceeds GitHub's size limit
+  (the GH001 pre-receive rejection), as opposed to any other push failure. }
+function IsOversizeRejection(const AText: string): Boolean;
+
+{ Rewrite AGit's not-yet-pushed commits so they no longer contain any blob at or
+  over GITHUB_FILE_LIMIT, making the branch pushable again. The offending paths
+  are appended to ADropped and added to the exclude block, so the next cycle
+  neither re-commits them nor forgets them.
+
+  Nothing is thrown away: a dropped file that is still in the working tree is
+  left exactly as it is, and one that is not (it was committed and then deleted,
+  so the local object store held its only copy) is written back to the working
+  tree as an untracked file, for the user to move somewhere else or delete.
+
+  Returns False, with ADetail, when it must not or cannot act -- a detached HEAD,
+  a branch that has diverged from the remote, or no oversize blob actually found
+  in the unpushed range -- leaving the caller's normal error handling to run.
+  Only for auto-synced repos: it collapses the unpushed commits into one, which
+  would discard a user's hand-written commit messages in a managed repo.
+
+  AHardLimitBytes is the size that makes a blob unpushable; it only ever differs
+  from GitHub's limit in tests. }
+function DropOversizeFromUnpushed(AGit: TGitRunner; const ABranch, AMachine: string;
+  ADropped: TStrings; out ADetail: string;
+  AHardLimitBytes: Int64 = GITHUB_FILE_LIMIT): Boolean;
+
 implementation
 
 uses
-  gboxlog, gboxsync, gboxlfs;
+  gboxlog, gboxsync;
 
 { Recursively delete a directory tree; best-effort (ignores files it can't
   remove, e.g. a locked/read-only pack on Windows -- a leftover dir is harmless). }
@@ -306,6 +341,242 @@ begin
       ADetail := 'recovery error: ' + E.Message;
       Result := False;
     end;
+  end;
+end;
+
+
+{ ---------------------------------------------------------------------------
+  Recovery 2: an oversize blob that already reached a local commit
+  --------------------------------------------------------------------------- }
+
+function IsOversizeRejection(const AText: string): Boolean;
+var
+  s: string;
+begin
+  s := LowerCase(AText);
+  Result := (Pos('gh001', s) > 0) or (Pos('file size limit', s) > 0) or
+    (Pos('exceeds github', s) > 0);
+end;
+
+{ Append to AOut every path in ACommit's tree whose blob is at/over
+  GITHUB_FILE_LIMIT, and to ASrc the commit it was read from (kept index-parallel
+  with AOut, so a file can later be restored from a commit that still has it).
+  `ls-tree -r -l` prints "<mode> <type> <sha> <size>"#9"<path>"; a gitlink has
+  '-' for the size and is skipped by the numeric parse. }
+procedure CollectOversizeBlobs(AGit: TGitRunner; const ACommit: string;
+  AHardLimitBytes: Int64; AOut, ASrc: TStrings);
+var
+  r: TGitResult;
+  lines: TStringList;
+  i, t, sp: Integer;
+  meta, path: string;
+begin
+  // core.quotePath=false keeps non-ASCII paths readable instead of \NNN-escaped
+  r := AGit.GitQuiet(['-c', 'core.quotePath=false', 'ls-tree', '-r',
+    '-l', '--full-tree', ACommit]);
+  if not r.Ok then Exit;
+  lines := TStringList.Create;
+  try
+    lines.Text := r.StdOut;
+    for i := 0 to lines.Count - 1 do
+    begin
+      t := Pos(#9, lines[i]);
+      if t <= 0 then Continue;
+      meta := Copy(lines[i], 1, t - 1);
+      path := Copy(lines[i], t + 1, MaxInt);
+      sp := LastDelimiter(' ', meta);
+      if sp <= 0 then Continue;
+      if StrToInt64Def(Trim(Copy(meta, sp + 1, MaxInt)), -1) < AHardLimitBytes then
+        Continue;
+      if (path = '') or (AOut.IndexOf(path) >= 0) then Continue;
+      AOut.Add(path);
+      ASrc.Add(ACommit);
+    end;
+  finally
+    lines.Free;
+  end;
+end;
+
+{ True if APath already exists at ABase (i.e. the remote has accepted it) with a
+  blob that is itself oversize. That should be impossible -- GitHub would have
+  rejected it -- but if it ever is, the blob is not ours to drop: removing it
+  would delete published content rather than unblock the push. }
+function PublishedOversize(AGit: TGitRunner; const ABase, APath: string;
+  AHardLimitBytes: Int64): Boolean;
+var
+  sha: string;
+begin
+  Result := False;
+  if ABase = '' then Exit;
+  sha := Trim(AGit.GitQuiet(['rev-parse', '--verify', '-q', ABase +
+    ':' + APath]).StdOut);
+  if sha = '' then Exit;
+  Result := StrToInt64Def(Trim(AGit.GitQuiet(['cat-file', '-s', sha]).StdOut), 0) >=
+    AHardLimitBytes;
+end;
+
+function DropOversizeFromUnpushed(AGit: TGitRunner; const ABranch, AMachine: string;
+  ADropped: TStrings; out ADetail: string;
+  AHardLimitBytes: Int64 = GITHUB_FILE_LIMIT): Boolean;
+var
+  base, head, newTree, newHead, full, ref: string;
+  r: TGitResult;
+  revs, paths, srcs, blocked: TStringList;
+  i, restored: Integer;
+  msg, more: string;
+begin
+  Result := False;
+  ADetail := '';
+  if ADropped = nil then Exit;
+
+  // Rewriting a detached HEAD would build a commit no branch points at, so the
+  // push would be rejected all over again (the worker re-attaches HEAD itself).
+  if not AGit.GitQuiet(['symbolic-ref', '-q', 'HEAD']).Ok then
+  begin
+    ADetail := 'detached HEAD -- not rewriting history';
+    Exit;
+  end;
+  head := Trim(AGit.GitQuiet(['rev-parse', 'HEAD']).StdOut);
+  if head = '' then
+  begin
+    ADetail := 'no commit on this branch yet';
+    Exit;
+  end;
+
+  // '' when the branch has never been pushed: then every commit is ours to
+  // rewrite and the replacement is a fresh root commit.
+  base := Trim(AGit.GitQuiet(['rev-parse', '--verify', '-q', 'origin/' +
+    ABranch]).StdOut);
+
+  // Only ever rewrite commits that sit strictly on top of what the remote has.
+  // A diverged branch is a different problem (and RunSyncCycle's merge/reset
+  // path owns it); collapsing it here would silently drop remote history.
+  if (base <> '') and (not AGit.GitQuiet(['merge-base', '--is-ancestor',
+    base, 'HEAD']).Ok) then
+  begin
+    ADetail := 'local branch has diverged from the remote -- not rewriting history';
+    Exit;
+  end;
+
+  revs := TStringList.Create;
+  paths := TStringList.Create;
+  srcs := TStringList.Create;
+  blocked := TStringList.Create;
+  try
+    blocked.Sorted := True;
+    blocked.Duplicates := dupIgnore;
+
+    if base <> '' then
+      r := AGit.GitQuiet(['rev-list', base + '..HEAD'])
+    else
+      r := AGit.GitQuiet(['rev-list', 'HEAD']);
+    if not r.Ok then
+    begin
+      ADetail := 'cannot list the unpushed commits';
+      Exit;
+    end;
+    revs.Text := r.StdOut;    // newest commit first
+
+    // Find the offenders ourselves rather than trusting the wording of the
+    // remote's message: GitHub names only the first file it trips over, and the
+    // tree scan finds every one of them in a single pass.
+    for i := 0 to revs.Count - 1 do
+      if Trim(revs[i]) <> '' then
+        CollectOversizeBlobs(AGit, Trim(revs[i]), AHardLimitBytes, paths, srcs);
+
+    for i := paths.Count - 1 downto 0 do
+      if PublishedOversize(AGit, base, paths[i], AHardLimitBytes) then
+      begin
+        paths.Delete(i);
+        srcs.Delete(i);
+      end;
+
+    if paths.Count = 0 then
+    begin
+      ADetail := 'push was rejected for an oversize file, but none is present ' +
+        'in the unpushed commits';
+      Exit;
+    end;
+
+    // 1. Give the bytes back for anything the commits were the last copy of.
+    //    `checkout <commit> -- <path>` writes the file and stages it; step 2
+    //    unstages it again, leaving it on disk as an untracked file.
+    restored := 0;
+    for i := 0 to paths.Count - 1 do
+    begin
+      full := IncludeTrailingPathDelimiter(AGit.WorkDir) + paths[i];
+      if FileExists(full) then Continue;
+      if AGit.Git(['checkout', srcs[i], '--', paths[i]]).Ok then
+        Inc(restored);
+    end;
+
+    // 2. Drop them from the index; the replacement commit is built from it.
+    for i := 0 to paths.Count - 1 do
+      AGit.GitQuiet(['rm', '--cached', '-q', '--ignore-unmatch', '--', paths[i]]);
+
+    newTree := Trim(AGit.GitQuiet(['write-tree']).StdOut);
+    if newTree = '' then
+    begin
+      ADetail := 'could not write the rewritten tree';
+      Exit;
+    end;
+
+    // 3. Replace the unpushed commits with a single one carrying that tree.
+    //    Building it with commit-tree + update-ref (rather than reset+commit)
+    //    means the branch only ever moves once, and only from the exact commit
+    //    we inspected -- update-ref's old-value argument makes it a no-op if
+    //    anything else moved the branch underneath us.
+    // same shape as gboxsync's auto-commit messages
+    msg := Format('%s %s', [AMachine, FormatDateTime('yyyy-mm-dd hh:nn:ss', Now)]);
+    ref := 'refs/heads/' + ABranch;
+    if (base <> '') and (newTree =
+      Trim(AGit.GitQuiet(['rev-parse', base + '^{tree}']).StdOut)) then
+      // the oversize file was all these commits ever added: nothing left to push
+      newHead := base
+    else
+    begin
+      if base <> '' then
+        r := AGit.GitQuiet(['commit-tree', newTree, '-p', base, '-m', msg])
+      else
+        r := AGit.GitQuiet(['commit-tree', newTree, '-m', msg]);
+      newHead := Trim(r.StdOut);
+      if (not r.Ok) or (newHead = '') then
+      begin
+        ADetail := 'could not build the rewritten commit: ' + Trim(r.StdErr);
+        Exit;
+      end;
+    end;
+    r := AGit.Git(['update-ref', ref, newHead, head]);
+    if not r.Ok then
+    begin
+      ADetail := 'could not move ' + ABranch + ' to the rewritten commit: ' +
+        Trim(r.StdErr);
+      Exit;
+    end;
+
+    // 4. Keep them out of the next commit, and tell the caller what we dropped.
+    //    (The orphaned blobs stay in .git until a gc prunes them -- the engine's
+    //    periodic gc does that on its own; nothing here depends on the space.)
+    ReadExcludeBlock(AGit, blocked);
+    for i := 0 to paths.Count - 1 do
+    begin
+      blocked.Add(paths[i]);
+      if ADropped.IndexOf(paths[i]) < 0 then ADropped.Add(paths[i]);
+    end;
+    WriteExcludeBlock(AGit, blocked);
+
+    more := '';
+    if paths.Count > 1 then more := Format(' +%d more', [paths.Count - 1]);
+    ADetail := Format('dropped %d file(s) too large for GitHub from the unpushed ' +
+      'history (%s%s); %d written back to the folder as untracked file(s)',
+      [paths.Count, paths[0], more, restored]);
+    if Assigned(Log) then Log.Info('recover', ADetail);
+    Result := True;
+  finally
+    blocked.Free;
+    srcs.Free;
+    paths.Free;
+    revs.Free;
   end;
 end;
 

@@ -26,7 +26,12 @@ program testrecover;
 
   Verifies: the repo is healthy again, tracked files match the clean remote, the
   uncommitted edit is preserved as a "(recovered ...)" copy, an untracked local
-  addition survives, and a HEALTHY repo is left untouched. }
+  addition survives, and a HEALTHY repo is left untouched.
+
+  Then, separately, oversize-commit recovery (gboxrecover.DropOversizeFromUnpushed):
+  a blob too large to push that is already sitting in an unpushed commit is
+  rewritten out of it, so the branch becomes pushable again while the file itself
+  stays in the folder. A 32-byte limit stands in for GitHub's 100 MB. }
 
 {$mode objfpc}{$H+}
 
@@ -36,6 +41,7 @@ uses
   gboxlog,
   gboxgitrunner,
   gboxrecover,
+  gboxlfs,
   gboxsync;
 
 var
@@ -146,9 +152,9 @@ var
   end;
 
 var
-  base, bare, aDir, detail: string;
+  base, bare, aDir, bDir, detail: string;
   git: TGitRunner;
-  conflicts: TStringList;
+  conflicts, dropped, blocked: TStringList;
   recovered: Integer;
   ok: Boolean;
 begin
@@ -218,6 +224,90 @@ begin
   finally
     git.Free;
     conflicts.Free;
+  end;
+
+  // -------------------------------------------------------------------------
+  // oversize blob already committed: rewrite it out of the unpushed history
+  // -------------------------------------------------------------------------
+  bDir := IncludeTrailingPathDelimiter(base) + 'B';
+  with TGitRunner.Create('') do
+  try
+    Clone(bare, bDir);
+  finally
+    Free;
+  end;
+  SetIdentity(bDir, 'bob');
+
+  dropped := TStringList.Create;
+  git := TGitRunner.Create(bDir);
+  try
+    // commit1: a file over the limit, plus one ordinary file. commit2: the user
+    // deletes the big file again -- so the working tree no longer has it and the
+    // only copy of its bytes is the (unpushable) commit. Neither is pushed.
+    WriteText(IncludeTrailingPathDelimiter(bDir) + 'big.bin', StringOfChar('x', 64));
+    WriteText(IncludeTrailingPathDelimiter(bDir) + 'keep.txt', 'keep-me');
+    git.Git(['add', '-A']);
+    git.Git(['commit', '-m', 'add big + keep']);
+    DeleteFile(IncludeTrailingPathDelimiter(bDir) + 'big.bin');
+    git.Git(['add', '-A']);
+    git.Git(['commit', '-m', 'remove big']);
+    Check(StrToIntDef(Trim(git.GitQuiet(['rev-list', '--count',
+      'origin/main..HEAD']).StdOut), -1) = 2, 'oversize: two unpushed commits');
+
+    ok := DropOversizeFromUnpushed(git, 'main', 'bob', dropped, detail, 32);
+    Check(ok, 'oversize: rewrite reports success (' + detail + ')');
+    Check(dropped.IndexOf('big.bin') >= 0, 'oversize: big.bin reported as dropped');
+
+    // the two commits collapse into one that no longer carries the huge blob
+    Check(StrToIntDef(Trim(git.GitQuiet(['rev-list', '--count',
+      'origin/main..HEAD']).StdOut), -1) = 1, 'oversize: one unpushed commit left');
+    Check(Pos('big.bin', git.GitQuiet(['ls-tree', '-r', '--name-only', 'HEAD']).StdOut) = 0, 'oversize: big.bin is gone from the new tree');
+    Check(Pos('keep.txt', git.GitQuiet(['ls-tree', '-r', '--name-only', 'HEAD']).StdOut) > 0, 'oversize: the ordinary file survived the rewrite');
+
+    // the bytes are handed back to the user rather than discarded
+    Check(FileExists(IncludeTrailingPathDelimiter(bDir) + 'big.bin'),
+      'oversize: the file is written back into the folder');
+
+    // ... and blocked, so the very next add -A cannot re-commit it
+    blocked := TStringList.Create;
+    try
+      ReadExcludeBlock(git, blocked);
+      Check(blocked.IndexOf('big.bin') >= 0,
+        'oversize: big.bin is in the exclude block');
+    finally
+      blocked.Free;
+    end;
+    git.AddAll;
+    Check(Pos('big.bin', git.GitQuiet(['diff', '--cached', '--name-only']).StdOut) = 0,
+      'oversize: big.bin is not staged again');
+
+    // the whole point: the branch publishes now
+    Check(git.Push(False).Ok, 'oversize: the rewritten branch pushes');
+    Check(git.GitQuiet(['fsck', '--no-progress', '--connectivity-only']).Ok,
+      'oversize: repo is still consistent after the rewrite');
+
+    // nothing oversize left -> a second attempt declines instead of rewriting
+    dropped.Clear;
+    Check(not DropOversizeFromUnpushed(git, 'main', 'bob', dropped, detail, 32),
+      'oversize: declines when no oversize blob is in the unpushed range');
+
+    // A detached HEAD is never rewritten: the replacement commit would move no
+    // branch, so the push would be rejected again. Stage a real oversize commit
+    // first, so the only reason to decline is the detached HEAD.
+    WriteText(IncludeTrailingPathDelimiter(bDir) + 'big2.bin', StringOfChar('y', 64));
+    git.Git(['add', '-A']);
+    git.Git(['commit', '-m', 'add big2']);
+    Check(git.Git(['checkout', '--detach', 'HEAD']).Ok, 'oversize: HEAD detached');
+    Check(not git.GitQuiet(['symbolic-ref', '-q', 'HEAD']).Ok,
+      'oversize: HEAD really is detached');
+    dropped.Clear;
+    Check(not DropOversizeFromUnpushed(git, 'main', 'bob', dropped, detail, 32),
+      'oversize: declines on a detached HEAD');
+    Check(Pos('detached', detail) > 0,
+      'oversize: and says why (' + detail + ')');
+  finally
+    git.Free;
+    dropped.Free;
   end;
 
   WriteLn;
