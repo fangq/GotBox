@@ -152,7 +152,7 @@ var
   end;
 
 var
-  base, bare, aDir, bDir, detail: string;
+  base, bare, aDir, bDir, cDir, detail: string;
   git: TGitRunner;
   conflicts, dropped, blocked: TStringList;
   recovered: Integer;
@@ -261,8 +261,11 @@ begin
     // the two commits collapse into one that no longer carries the huge blob
     Check(StrToIntDef(Trim(git.GitQuiet(['rev-list', '--count',
       'origin/main..HEAD']).StdOut), -1) = 1, 'oversize: one unpushed commit left');
-    Check(Pos('big.bin', git.GitQuiet(['ls-tree', '-r', '--name-only', 'HEAD']).StdOut) = 0, 'oversize: big.bin is gone from the new tree');
-    Check(Pos('keep.txt', git.GitQuiet(['ls-tree', '-r', '--name-only', 'HEAD']).StdOut) > 0, 'oversize: the ordinary file survived the rewrite');
+    Check(Pos('big.bin', git.GitQuiet(['ls-tree', '-r', '--name-only', 'HEAD']).StdOut) =
+      0, 'oversize: big.bin is gone from the new tree');
+    Check(Pos('keep.txt', git.GitQuiet(['ls-tree', '-r', '--name-only',
+      'HEAD']).StdOut) >
+      0, 'oversize: the ordinary file survived the rewrite');
 
     // the bytes are handed back to the user rather than discarded
     Check(FileExists(IncludeTrailingPathDelimiter(bDir) + 'big.bin'),
@@ -305,6 +308,56 @@ begin
       'oversize: declines on a detached HEAD');
     Check(Pos('detached', detail) > 0,
       'oversize: and says why (' + detail + ')');
+  finally
+    git.Free;
+    dropped.Free;
+  end;
+
+  // -------------------------------------------------------------------------
+  // the same recovery for a file the remote ALREADY HAS, which grew past the
+  // limit: it must keep its last-pushed version instead of being deleted (that
+  // deletion would propagate to every other machine on their next pull)
+  // -------------------------------------------------------------------------
+  cDir := IncludeTrailingPathDelimiter(base) + 'C';
+  with TGitRunner.Create('') do
+  try
+    Clone(bare, cDir);
+  finally
+    Free;
+  end;
+  SetIdentity(cDir, 'carol');
+
+  dropped := TStringList.Create;
+  git := TGitRunner.Create(cDir);
+  try
+    // publish a small version, then grow it past the limit in an unpushed commit
+    WriteText(IncludeTrailingPathDelimiter(cDir) + 'grown.bin', 'small');
+    git.Git(['add', '-A']);
+    git.Git(['commit', '-m', 'add grown.bin while small']);
+    Check(git.Push(False).Ok, 'grown: the small version is on the remote');
+    WriteText(IncludeTrailingPathDelimiter(cDir) + 'grown.bin', StringOfChar('z', 64));
+    git.Git(['add', '-A']);
+    git.Git(['commit', '-m', 'grow past the limit']);
+
+    ok := DropOversizeFromUnpushed(git, 'main', 'carol', dropped, detail, 32);
+    Check(ok, 'grown: rewrite reports success (' + detail + ')');
+
+    // the crucial part: no deletion is published
+    Check(Pos('grown.bin', git.GitQuiet(['diff', '--name-status',
+      'origin/main', 'HEAD']).StdOut) = 0,
+      'grown: the rewritten commit does not touch grown.bin at all');
+    Check(Trim(git.GitQuiet(['ls-files', '--', 'grown.bin']).StdOut) = 'grown.bin',
+      'grown: the file is still tracked');
+    Check(Trim(ReadText(IncludeTrailingPathDelimiter(cDir) + 'grown.bin')) =
+      StringOfChar('z', 64), 'grown: the oversize version is still in the folder');
+    Check(Trim(git.GitQuiet(['cat-file', '-p', 'HEAD:grown.bin']).StdOut) = 'small',
+      'grown: the repo keeps the last pushed version');
+
+    // and it must stay that way: add -A re-stages it, the backstop unstages it
+    git.AddAll;
+    Check(Pos('grown.bin', git.GitQuiet(['diff', '--cached', '--name-only']).StdOut) > 0, 'grown: add -A stages it again (tracked path)');
+    Check(UnstageOversize(git, 32, nil) = 1, 'grown: the backstop unstages it');
+    Check(git.Push(False).Ok, 'grown: the branch pushes');
   finally
     git.Free;
     dropped.Free;

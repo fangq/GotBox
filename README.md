@@ -356,7 +356,8 @@ needed); repos are created as bare repositories under that base.
   `git-lfs`, an oversize file is kept out of commits entirely; if one ever
   reaches a commit anyway, the un-pushed history is rewritten without it rather
   than leaving the folder permanently unable to push. Your copy of the file is
-  never deleted.
+  never deleted, and neither is anyone else's: a file the remote already has
+  keeps its last-pushed version rather than being removed from the repo.
 
 ---
 
@@ -403,9 +404,11 @@ managing unless you pass `--takeover` (the GUI, by contrast, asks).
   (classic token). Re-enter it in **Account…**.
 - **Large file won't sync** — install `git-lfs` (large files at/above the LFS
   threshold need it); without it those files are skipped and left in your folder.
-  If a file over 100 MB somehow got into a commit before it could be skipped,
-  GotBox rewrites that (not-yet-pushed) commit without it so the rest of the
-  folder keeps syncing — the file itself stays in your folder, untouched.
+  This also covers a file already in the repo that *grows* past 100 MB: the older
+  version stays in the repo (so it isn't deleted from your other machines) and
+  the new, too-big version simply stays uncommitted in your folder. If an
+  oversize file ever does reach a commit, GotBox rewrites that (not-yet-pushed)
+  commit without it so the rest of the folder keeps syncing.
 - **Nothing syncs on a fresh machine** — make sure you signed in (Account) and
   the sync folder is set; GotBox clones the existing `.gotbox` once both are set.
 - **A folder shows as a broken "link" on GitHub** — that folder is itself a git

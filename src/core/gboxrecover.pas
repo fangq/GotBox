@@ -72,10 +72,13 @@ function IsOversizeRejection(const AText: string): Boolean;
   are appended to ADropped and added to the exclude block, so the next cycle
   neither re-commits them nor forgets them.
 
-  Nothing is thrown away: a dropped file that is still in the working tree is
-  left exactly as it is, and one that is not (it was committed and then deleted,
-  so the local object store held its only copy) is written back to the working
-  tree as an untracked file, for the user to move somewhere else or delete.
+  Nothing is thrown away, and nothing is deleted from the user's other machines.
+  A path the remote already has (a tracked file that grew past the limit) keeps
+  its last-pushed version in the repo, so the rewrite publishes no deletion. A
+  purely local addition is dropped from the index and excluded, and if it is no
+  longer in the working tree -- committed and then deleted, so the object store
+  held its only copy -- its bytes are written back into the folder as an
+  untracked file for the user to move somewhere else or delete.
 
   Returns False, with ADetail, when it must not or cannot act -- a detached HEAD,
   a branch that has diverged from the remote, or no oversize blob actually found
@@ -415,6 +418,35 @@ begin
     AHardLimitBytes;
 end;
 
+{ Put ABase's version of APath back into the index -- index only, so the working
+  tree keeps the user's oversize file. Used instead of dropping the path when the
+  remote already has it: removing it would publish a deletion and wipe the file
+  from the user's other machines on their next pull. False if ABase has no such
+  path (it is a purely local addition, which the caller then unstages instead). }
+function RestoreIndexFrom(AGit: TGitRunner; const ABase, APath: string): Boolean;
+var
+  r: TGitResult;
+  ln, mode, sha: string;
+  sp, t: Integer;
+begin
+  Result := False;
+  if ABase = '' then Exit;
+  r := AGit.GitQuiet(['-c', 'core.quotePath=false', 'ls-tree', ABase, '--', APath]);
+  if not r.Ok then Exit;
+  ln := Trim(r.StdOut);              // "<mode> blob <sha>"#9"<path>"
+  t := Pos(#9, ln);
+  if t <= 0 then Exit;
+  ln := Copy(ln, 1, t - 1);
+  sp := Pos(' ', ln);
+  if sp <= 0 then Exit;
+  mode := Copy(ln, 1, sp - 1);
+  sp := LastDelimiter(' ', ln);
+  sha := Trim(Copy(ln, sp + 1, MaxInt));
+  if (mode = '') or (sha = '') then Exit;
+  Result := AGit.GitQuiet(['update-index', '--add', '--cacheinfo',
+    mode + ',' + sha + ',' + APath]).Ok;
+end;
+
 function DropOversizeFromUnpushed(AGit: TGitRunner; const ABranch, AMachine: string;
   ADropped: TStrings; out ADetail: string;
   AHardLimitBytes: Int64 = GITHUB_FILE_LIMIT): Boolean;
@@ -422,7 +454,7 @@ var
   base, head, newTree, newHead, full, ref: string;
   r: TGitResult;
   revs, paths, srcs, blocked: TStringList;
-  i, restored: Integer;
+  i, restored, kept: Integer;
   msg, more: string;
 begin
   Result := False;
@@ -498,21 +530,36 @@ begin
       Exit;
     end;
 
-    // 1. Give the bytes back for anything the commits were the last copy of.
-    //    `checkout <commit> -- <path>` writes the file and stages it; step 2
-    //    unstages it again, leaving it on disk as an untracked file.
+    // Take them out of the replacement commit, which is built from the index.
+    // Which way depends on whether the remote already has the path:
+
+    //  - it does (a tracked file that grew past the limit): put its last-pushed
+    //    version back in the index. Removing it instead would publish a deletion
+    //    and wipe the file from the user's other machines. It stays tracked, so
+    //    it cannot be excluded -- git applies no ignore rule to a tracked path --
+    //    and UnstageOversize is what keeps the oversize working-tree version out
+    //    of every later commit. Nothing is lost either way: the repo still holds
+    //    a version of the file, so we leave the working tree exactly as it is.
+
+    //  - it does not (a purely local addition): the unpushed commits held the
+    //    only copy of these bytes, so write them back into the folder first if
+    //    the file is gone from it, then drop the path and exclude it.
     restored := 0;
+    kept := 0;
     for i := 0 to paths.Count - 1 do
     begin
+      if RestoreIndexFrom(AGit, base, paths[i]) then
+      begin
+        Inc(kept);
+        Continue;
+      end;
       full := IncludeTrailingPathDelimiter(AGit.WorkDir) + paths[i];
-      if FileExists(full) then Continue;
-      if AGit.Git(['checkout', srcs[i], '--', paths[i]]).Ok then
+      if (not FileExists(full)) and
+        AGit.Git(['checkout', srcs[i], '--', paths[i]]).Ok then
         Inc(restored);
-    end;
-
-    // 2. Drop them from the index; the replacement commit is built from it.
-    for i := 0 to paths.Count - 1 do
       AGit.GitQuiet(['rm', '--cached', '-q', '--ignore-unmatch', '--', paths[i]]);
+      blocked.Add(paths[i]);
+    end;
 
     newTree := Trim(AGit.GitQuiet(['write-tree']).StdOut);
     if newTree = '' then
@@ -557,19 +604,17 @@ begin
     // 4. Keep them out of the next commit, and tell the caller what we dropped.
     //    (The orphaned blobs stay in .git until a gc prunes them -- the engine's
     //    periodic gc does that on its own; nothing here depends on the space.)
-    ReadExcludeBlock(AGit, blocked);
     for i := 0 to paths.Count - 1 do
-    begin
-      blocked.Add(paths[i]);
       if ADropped.IndexOf(paths[i]) < 0 then ADropped.Add(paths[i]);
-    end;
+    ReadExcludeBlock(AGit, blocked);
     WriteExcludeBlock(AGit, blocked);
 
     more := '';
     if paths.Count > 1 then more := Format(' +%d more', [paths.Count - 1]);
-    ADetail := Format('dropped %d file(s) too large for GitHub from the unpushed ' +
-      'history (%s%s); %d written back to the folder as untracked file(s)',
-      [paths.Count, paths[0], more, restored]);
+    ADetail := Format('took %d file(s) too large for GitHub out of the unpushed ' +
+      'history (%s%s); %d kept in the repo at their last pushed version, ' +
+      '%d written back to the folder', [paths.Count, paths[0],
+      more, kept, restored]);
     if Assigned(Log) then Log.Info('recover', ADetail);
     Result := True;
   finally

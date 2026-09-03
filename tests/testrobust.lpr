@@ -415,6 +415,46 @@ var
       Check(FindOversizeUnhandled(git, 20, blocked) = 1, 'A1: flagged again');
       WriteExcludeBlock(git, blocked);
 
+      // A file git ALREADY TRACKS that grows past the limit is a different
+      // problem: ignore rules never apply to a tracked path, so `add -A` stages
+      // the oversize change however the exclude block is written, and committing
+      // it would make every push fail. UnstageOversize is the backstop.
+      WriteBinary(IncludeTrailingPathDelimiter(dir) + 'grown.txt', [Ord('s')]);
+      git.AddAll;
+      git.CommitAll('track grown.txt while it is small');
+      WriteBinary(IncludeTrailingPathDelimiter(dir) + 'grown.txt',
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
+      blocked.Add('grown.txt');
+      WriteExcludeBlock(git, blocked);
+      git.AddAll;
+      Check(Pos('grown.txt', git.GitQuiet(['diff', '--cached', '--name-only']).StdOut) > 0,
+        'A1: the exclude block does NOT hold back a tracked file (git ignores it)');
+
+      blocked.Clear;
+      Check(UnstageOversize(git, 20, blocked) = 1, 'A1: the grown file is unstaged');
+      Check(blocked.IndexOf('grown.txt') >= 0, 'A1: and reported');
+      Check(Pos('grown.txt', git.GitQuiet(['diff', '--cached', '--name-only']).StdOut) = 0, 'A1: the oversize change is no longer staged');
+      // the point of unstaging rather than removing: the file is still in the
+      // repo at its previous content, so it is not deleted from other machines
+      Check(Trim(git.GitQuiet(['ls-files', '--', 'grown.txt']).StdOut) = 'grown.txt',
+        'A1: the file is still tracked');
+      Check(Trim(git.GitQuiet(['cat-file', '-s',
+        Trim(git.GitQuiet(['rev-parse', 'HEAD:grown.txt']).StdOut)]).StdOut) = '1',
+        'A1: at its small, last-committed version');
+      Check(FileExists(IncludeTrailingPathDelimiter(dir) + 'grown.txt'),
+        'A1: while the oversize version stays in the folder');
+      // a small staged change is untouched by the backstop (add -A re-stages the
+      // grown file every cycle, which is exactly why the backstop has to run on
+      // every commit rather than once)
+      WriteBinary(IncludeTrailingPathDelimiter(dir) + 'small.txt', [Ord('y')]);
+      git.AddAll;
+      blocked.Clear;
+      UnstageOversize(git, 20, blocked);
+      Check(blocked.IndexOf('small.txt') < 0, 'A1: a small staged change is left alone');
+      Check(blocked.IndexOf('grown.txt') >= 0, 'A1: the grown file is caught again');
+      Check(Pos('small.txt', git.GitQuiet(['diff', '--cached', '--name-only']).StdOut) > 0, 'A1: small.txt is still staged');
+      git.GitQuiet(['reset', '-q', 'HEAD']);
+
       // once cleared (e.g. git-lfs now available), the block is removed and the
       // file stages normally again
       blocked.Clear;

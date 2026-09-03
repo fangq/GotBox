@@ -37,7 +37,7 @@ unit gboxsync;
 interface
 
 uses
-  Classes, SysUtils, gboxgitrunner, gboxconflict, gboxlog;
+  Classes, SysUtils, gboxgitrunner, gboxconflict, gboxlog, gboxlfs;
 
 type
   TSyncOutcome = (soUpToDate, soPushed, soPulled, soMerged, soConflict,
@@ -347,6 +347,13 @@ var
     if AGit.HasUncommittedChanges then
     begin
       AGit.AddAll;
+      // Last line of defence against GitHub's 100 MB limit: a file that is
+      // already tracked and has grown past it is staged by `add -A` regardless
+      // of the exclude block (ignore rules do not apply to tracked paths), and
+      // committing it would make every push fail. Unstage it here, after
+      // staging and before the commit, so the path keeps its last committed
+      // content instead of being dropped from the repo.
+      UnstageOversize(AGit, GITHUB_FILE_LIMIT, nil);
       Collect(['diff', '--cached', '--name-only']);   // local edits being synced
       r := AGit.CommitAll(CommitMsg(AMachine));
       Result := r.Ok;

@@ -65,6 +65,20 @@ procedure WriteExcludeBlock(AGit: TGitRunner; ABlocked: TStrings);
   scan's memory of oversize files across restarts. Returns AOut's count. }
 function ReadExcludeBlock(AGit: TGitRunner; AOut: TStrings): Integer;
 
+{ Drop from the index any path staged by a preceding `git add -A` whose working-
+  tree file is at/over AHardLimitBytes and that Git LFS is not absorbing, so the
+  doomed blob is never committed. Appends those paths to AOut; returns how many
+  were unstaged.
+
+  This is needed on top of the exclude block, which only covers *untracked*
+  paths: git applies no ignore rule to a file it already tracks, so one that
+  grows past the limit (a 50 MB archive appended to until it is 150 MB) is staged
+  by `add -A` however the block is written. Unstaging leaves the path in the
+  index at its last committed content -- the file stays in the repo and on the
+  user's other machines, and only the oversize change stays uncommitted. }
+function UnstageOversize(AGit: TGitRunner; AHardLimitBytes: Int64;
+  AOut: TStrings): Integer;
+
 { For each new/modified file in AGit's working tree that is >= AThresholdBytes
   and not already LFS-tracked, install the repo's LFS filters (once) and register
   the path with `git lfs track`. No-op when git-lfs is unavailable or the
@@ -132,6 +146,51 @@ procedure EnsureInstalled(AGit: TGitRunner);
 begin
   if not AGit.GitQuiet(['config', '--local', '--get', 'filter.lfs.smudge']).Ok then
     AGit.Git(['lfs', 'install', '--local']);
+end;
+
+function UnstageOversize(AGit: TGitRunner; AHardLimitBytes: Int64;
+  AOut: TStrings): Integer;
+var
+  r: TGitResult;
+  lines: TStringList;
+  i: Integer;
+  rel, full: string;
+  hasHead: Boolean;
+begin
+  Result := 0;
+  r := AGit.GitQuiet(['-c', 'core.quotePath=false', 'diff', '--cached',
+    '--name-only']);
+  if not r.Ok then Exit;
+  if Trim(r.StdOut) = '' then Exit;
+  // an unborn HEAD has no previous version to fall back to, so there an
+  // offending path simply goes back to being untracked
+  hasHead := AGit.GitQuiet(['rev-parse', '--verify', '-q', 'HEAD']).Ok;
+  lines := TStringList.Create;
+  try
+    lines.Text := r.StdOut;
+    for i := 0 to lines.Count - 1 do
+    begin
+      rel := Trim(lines[i]);
+      if rel = '' then Continue;
+      // the staged bytes came straight from the working tree, so its size is the
+      // test; a staged deletion has no file and FileSizeBytes' -1 skips it
+      full := IncludeTrailingPathDelimiter(AGit.WorkDir) + rel;
+      if FileSizeBytes(full) < AHardLimitBytes then Continue;
+      if IsLfsTracked(AGit, rel) then Continue;   // staged as a small pointer
+      if hasHead then
+        r := AGit.GitQuiet(['reset', '-q', 'HEAD', '--', rel])
+      else
+        r := AGit.GitQuiet(['rm', '--cached', '-q', '--ignore-unmatch', '--', rel]);
+      if not r.Ok then Continue;
+      Inc(Result);
+      if (AOut <> nil) and (AOut.IndexOf(rel) < 0) then AOut.Add(rel);
+      if Assigned(Log) then
+        Log.Warn('lfs', 'too large for GitHub; keeping the change out of the ' +
+          'commit: ' + rel);
+    end;
+  finally
+    lines.Free;
+  end;
 end;
 
 function TrackLargeFiles(AGit: TGitRunner; AThresholdBytes: Int64): Integer;
