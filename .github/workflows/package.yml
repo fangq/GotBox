@@ -37,11 +37,13 @@ jobs:
         uses: gcarreno/setup-lazarus@v3.4.1
         with:
           lazarus-version: stable
-          # The installer comes from SourceForge, whose mirrors are wildly
-          # inconsistent: one download in this job took 22 minutes while its two
-          # siblings took 4 seconds each, and that toll was paid by every job of
-          # every push. Cache the installer files so only a version bump pays it.
-          with-cache: true
+          # NOT with-cache: true. The installer comes from SourceForge, whose
+          # mirrors are wildly inconsistent (one download here took 22 minutes
+          # while its two siblings took 4 seconds each), so caching it is exactly
+          # what this job wants -- but the action's own cache is broken:
+          # it saves nothing ("Path Validation Error") and the next install dies
+          # on "E: Unsupported file .../fpcsrc.deb". Upstream issues #32 and #16,
+          # both open, and v3.4.1 is the latest release. Slow beats broken.
 
       - name: Install UPX
         run: sudo apt-get update && sudo apt-get install -y upx-ucl
@@ -144,11 +146,13 @@ jobs:
         uses: gcarreno/setup-lazarus@v3.4.1
         with:
           lazarus-version: stable
-          # The installer comes from SourceForge, whose mirrors are wildly
-          # inconsistent: one download in this job took 22 minutes while its two
-          # siblings took 4 seconds each, and that toll was paid by every job of
-          # every push. Cache the installer files so only a version bump pays it.
-          with-cache: true
+          # NOT with-cache: true. The installer comes from SourceForge, whose
+          # mirrors are wildly inconsistent (one download here took 22 minutes
+          # while its two siblings took 4 seconds each), so caching it is exactly
+          # what this job wants -- but the action's own cache is broken:
+          # it saves nothing ("Path Validation Error") and the next install dies
+          # on "E: Unsupported file .../fpcsrc.deb". Upstream issues #32 and #16,
+          # both open, and v3.4.1 is the latest release. Slow beats broken.
 
       - name: Generate project resource
         shell: bash
@@ -280,11 +284,13 @@ jobs:
         uses: gcarreno/setup-lazarus@v3.4.1
         with:
           lazarus-version: stable
-          # The installer comes from SourceForge, whose mirrors are wildly
-          # inconsistent: one download in this job took 22 minutes while its two
-          # siblings took 4 seconds each, and that toll was paid by every job of
-          # every push. Cache the installer files so only a version bump pays it.
-          with-cache: true
+          # NOT with-cache: true. The installer comes from SourceForge, whose
+          # mirrors are wildly inconsistent (one download here took 22 minutes
+          # while its two siblings took 4 seconds each), so caching it is exactly
+          # what this job wants -- but the action's own cache is broken:
+          # it saves nothing ("Path Validation Error") and the next install dies
+          # on "E: Unsupported file .../fpcsrc.deb". Upstream issues #32 and #16,
+          # both open, and v3.4.1 is the latest release. Slow beats broken.
 
       - name: Generate project resource
         run: fpcres -of res -o gotbox.res gotbox.rc
