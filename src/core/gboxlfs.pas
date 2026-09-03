@@ -32,7 +32,7 @@ unit gboxlfs;
 interface
 
 uses
-  Classes, SysUtils, gboxgitrunner;
+  Classes, SysUtils, gboxgitrunner, gboxexclude;
 
 const
   { GitHub rejects a plain `git push` containing any file over this size; nothing
@@ -250,43 +250,26 @@ const
   OVERSIZE_BEGIN = '# >>> gotbox: oversize files (need git-lfs, not synced) >>>';
   OVERSIZE_END = '# <<< gotbox oversize <<<';
 
-{ Path of AGit's <git-dir>/info/exclude, or '' if the git dir can't be resolved. }
-function ExcludeFilePath(AGit: TGitRunner): string;
-var
-  gitDir: string;
-begin
-  Result := '';
-  gitDir := Trim(AGit.GitQuiet(['rev-parse', '--absolute-git-dir']).StdOut);
-  if gitDir = '' then Exit;
-  Result := IncludeTrailingPathDelimiter(gitDir) + 'info' + PathDelim + 'exclude';
-end;
-
 function ReadExcludeBlock(AGit: TGitRunner; AOut: TStrings): Integer;
 var
-  exclPath, rel: string;
-  excl: TStringList;
-  a, i: Integer;
+  raw: TStringList;
+  rel: string;
+  i: Integer;
 begin
   Result := 0;
   if AOut = nil then Exit;
-  Result := AOut.Count;
-  exclPath := ExcludeFilePath(AGit);
-  if (exclPath = '') or (not FileExists(exclPath)) then Exit;
-  excl := TStringList.Create;
+  raw := TStringList.Create;
   try
-    excl.LoadFromFile(exclPath);
-    a := excl.IndexOf(OVERSIZE_BEGIN);
-    if a < 0 then Exit;
-    for i := a + 1 to excl.Count - 1 do
+    ReadExcludeSection(AGit, OVERSIZE_BEGIN, OVERSIZE_END, raw);
+    for i := 0 to raw.Count - 1 do
     begin
-      if excl[i] = OVERSIZE_END then Break;
-      rel := Trim(excl[i]);
+      rel := Trim(raw[i]);
       if (rel <> '') and (rel[1] = '/') then
         Delete(rel, 1, 1);        // undo the anchoring '/' WriteExcludeBlock adds
       if (rel <> '') and (AOut.IndexOf(rel) < 0) then AOut.Add(rel);
     end;
   finally
-    excl.Free;
+    raw.Free;
   end;
   Result := AOut.Count;
 end;
@@ -347,34 +330,18 @@ end;
 
 procedure WriteExcludeBlock(AGit: TGitRunner; ABlocked: TStrings);
 var
-  exclPath: string;
-  excl: TStringList;
-  a, b, i: Integer;
+  lines: TStringList;
+  i: Integer;
 begin
-  exclPath := ExcludeFilePath(AGit);
-  if exclPath = '' then Exit;
-  excl := TStringList.Create;
+  lines := TStringList.Create;
   try
-    if FileExists(exclPath) then excl.LoadFromFile(exclPath);
-    // drop any previous managed block
-    a := excl.IndexOf(OVERSIZE_BEGIN);
-    if a >= 0 then
-    begin
-      b := excl.IndexOf(OVERSIZE_END);
-      if b < a then b := excl.Count - 1;
-      for i := b downto a do excl.Delete(i);
-    end;
-    // re-add it from the current blocked set (leading '/' anchors to repo root)
-    if (ABlocked <> nil) and (ABlocked.Count > 0) then
-    begin
-      excl.Add(OVERSIZE_BEGIN);
-      for i := 0 to ABlocked.Count - 1 do excl.Add('/' + ABlocked[i]);
-      excl.Add(OVERSIZE_END);
-    end;
-    ForceDirectories(ExtractFilePath(exclPath));
-    excl.SaveToFile(exclPath);
+    // a leading '/' anchors each entry to the repo root: these are exact paths,
+    // not patterns, so they must not match a same-named file in another folder
+    if Assigned(ABlocked) then
+      for i := 0 to ABlocked.Count - 1 do lines.Add('/' + ABlocked[i]);
+    WriteExcludeSection(AGit, OVERSIZE_BEGIN, OVERSIZE_END, lines);
   finally
-    excl.Free;
+    lines.Free;
   end;
 end;
 

@@ -93,7 +93,8 @@ procedure EngTrace(const AMsg: string);
 begin
   if gEngTrace < 0 then
     if GetEnvironmentVariable('GOTBOX_GIT_TRACE') <> '' then gEngTrace := 1
-    else gEngTrace := 0;
+    else
+      gEngTrace := 0;
   if gEngTrace = 1 then
   begin
     WriteLn(StdErr, 'ENG: ' + AMsg);
@@ -284,8 +285,8 @@ begin
   if Assigned(FStatusCache) then FStatusCache.Invalidate(ALocalPath);
 end;
 
-procedure TSyncEngine.SpawnWorker(const AName, APath: string; AAutoSync: Boolean;
-  AExtraIgnore: TStrings);
+procedure TSyncEngine.SpawnWorker(const AName, APath: string;
+  AAutoSync: Boolean; AExtraIgnore: TStrings);
 var
   ignore: TStringList;
   w: TRepoWorker;
@@ -297,8 +298,11 @@ begin
       ignore.AddStrings(AExtraIgnore);
     w := TRepoWorker.Create(AName, APath, FCfg.GithubUser, FToken,
       FCfg.MachineName, FCfg.CommitDebounceMs, FCfg.GcEveryNCommits,
-      FCfg.PullIntervalSec, FCfg.HistoryCap, FCfg.LfsThresholdMB, AAutoSync,
-      FStatus, ignore);
+      FCfg.PullIntervalSec, FCfg.HistoryCap, FCfg.LfsThresholdMB,
+      AAutoSync, FStatus, ignore);
+    // the watcher list above also carries submodule names; the exclude file must
+    // only ever see the user's own patterns
+    w.SetConfigIgnore(FCfg.IgnoreGlobs);
     w.OnNotice := FOnNotice;
     w.OnCycleDone := @WorkerCycleDone;
     // only the root's .gitmodules governs the submodule set

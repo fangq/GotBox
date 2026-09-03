@@ -330,7 +330,31 @@ Key options (defaults in brackets):
 | **Pull interval** | How often (s) to check for remote changes. A cheap `ls-remote` check runs each interval; a full fetch/merge only when the remote actually moved. [15] |
 | **GC every N commits** | Run git maintenance after this many commits. [25] |
 | **LFS threshold (MB)** | Auto-track files at/above this size with Git LFS; `0` disables. [95] |
-| **Ignore patterns** | Globs never synced. [`.git`, `*.tmp`, `*~`] |
+
+#### Ignore patterns
+
+Files matching these globs are never committed and never wake a sync. Patterns
+match a file or folder **name** at any depth (`*` and `?` only), and the
+defaults cover the usual editor/OS churn:
+
+```
+.git       *.tmp      *~         *.bak      #*#        .#*
+*.swp      *.swo      ~$*        .~lock.*#  .DS_Store  ._*
+Thumbs.db  desktop.ini           $RECYCLE.BIN          .Trash-*
+*.part     *.crdownload
+```
+
+Edit the list in **Settings…**. GotBox mirrors it into the repo's
+`.git/info/exclude` (not a committed `.gitignore`, since the list is per
+machine), so the patterns keep files out of commits as well as out of the
+watcher. Two things to know:
+
+- Adding a pattern does **not** untrack a file that is already synced — git
+  applies ignore rules only to untracked files. Delete the file from your sync
+  folder if you want it gone from the repo.
+- Upgrading tops your saved list up with any defaults added since it was
+  written, keeping your own patterns. A default you deleted will come back once.
+| **Ignore patterns** | Globs never synced — see [below](#ignore-patterns). |
 
 > **Your token is never stored in this file** — it lives only in the OS keychain.
 

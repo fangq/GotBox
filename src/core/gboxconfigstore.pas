@@ -82,6 +82,12 @@ function GotDataDir: string;
   %USERPROFILE%\GotBox on Windows). Not created here -- just the path. }
 function DefaultRootDir: string;
 
+{ The patterns GotBox ignores out of the box: editor backups and swap files,
+  office lock files, OS metadata, trash folders and half-finished downloads --
+  churn that no one wants versioned. Appended to AOut, skipping any already
+  there. }
+procedure AddDefaultIgnoreGlobs(AOut: TStrings);
+
 implementation
 
 { NOTE: do not pull in the Windows unit here -- its GetEnvironmentVariable
@@ -133,6 +139,38 @@ begin
   {$ENDIF}
 end;
 
+const
+  DEFAULT_IGNORE_GLOBS: array[0..17] of string = (
+    '.git',
+    '*.tmp',
+    '*~',              // emacs/gedit/kate backup
+    '*.bak',
+    '#*#',             // emacs auto-save
+    '.#*',             // emacs lock link
+    '*.swp',           // vim swap
+    '*.swo',
+    '~$*',             // MS Office lock/owner file
+    '.~lock.*#',       // LibreOffice lock file
+    '.DS_Store',       // macOS Finder metadata
+    '._*',             // macOS AppleDouble sidecar
+    'Thumbs.db',       // Windows thumbnail cache
+    'desktop.ini',
+    '$RECYCLE.BIN',    // Windows recycle bin
+    '.Trash-*',        // Linux trash
+    '*.part',          // partial download (Firefox, wget, rsync)
+    '*.crdownload'     // partial download (Chrome)
+    );
+
+procedure AddDefaultIgnoreGlobs(AOut: TStrings);
+var
+  i: Integer;
+begin
+  if AOut = nil then Exit;
+  for i := Low(DEFAULT_IGNORE_GLOBS) to High(DEFAULT_IGNORE_GLOBS) do
+    if AOut.IndexOf(DEFAULT_IGNORE_GLOBS[i]) < 0 then
+      AOut.Add(DEFAULT_IGNORE_GLOBS[i]);
+end;
+
 { ---- TGotConfig ---- }
 
 constructor TGotConfig.Create;
@@ -172,9 +210,7 @@ begin
   LfsThresholdMB := 95;
   RepoVisibility := 'private';
   IgnoreGlobs.Clear;
-  IgnoreGlobs.Add('.git');
-  IgnoreGlobs.Add('*.tmp');
-  IgnoreGlobs.Add('*~');
+  AddDefaultIgnoreGlobs(IgnoreGlobs);
   SetLength(Repos, 0);
 end;
 
@@ -251,6 +287,11 @@ begin
         arr := TJSONArray(jrepos);
         for i := 0 to arr.Count - 1 do
           Result.IgnoreGlobs.Add(arr.Strings[i]);
+        // A config written by an older version holds only the defaults of its
+        // day, so top it up with any that have been added since. The user's own
+        // patterns are kept; a default they deleted does come back, which is the
+        // price of not carrying a separate "deleted defaults" list around.
+        AddDefaultIgnoreGlobs(Result.IgnoreGlobs);
       end;
 
       jrepos := obj.Find('repos');

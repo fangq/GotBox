@@ -30,7 +30,7 @@ interface
 uses
   Classes, SysUtils, DateUtils, SyncObjs,
   gboxgitrunner, gboxfilewatcher, gboxstatusmodel, gboxsync, gboxhistory, gboxlfs,
-  gboxrecover;
+  gboxrecover, gboxexclude;
 
 type
   { Fired (on the worker thread) after a cycle that synced files, with a ready-
@@ -70,6 +70,13 @@ type
     FAutoSync: Boolean;         // True = auto add/commit/trim; False = managed
     FStatus: TStatusModel;
     FIgnore: TStringList;
+    { The user's configured ignore globs, mirrored into .git/info/exclude each
+      cycle. Deliberately NOT FIgnore: that one drives the file watcher and also
+      carries the registered submodule folder names, which must never become
+      ignore patterns -- a submodule is tracked content, and if one were ever
+      unlinked the folder would silently stop syncing instead of becoming plain
+      files. }
+    FConfigIgnore: TStringList;
     FWatcher: TFileWatcher;
     FLock: TCriticalSection;
     FDirty: Boolean;
@@ -99,6 +106,8 @@ type
     constructor Create(const AName, ALocalPath, AUser, AToken, AMachine: string;
       ADebounceMs, AGcEvery, APullIntervalSec, AHistoryCap, ALfsThresholdMB: Integer;
       AAutoSync: Boolean; AStatus: TStatusModel; AIgnore: TStrings);
+    { Set the configured ignore globs (see FConfigIgnore). }
+    procedure SetConfigIgnore(AGlobs: TStrings);
     destructor Destroy; override;
     { Request an immediate sync (e.g. the user chose "Sync now"). }
     procedure RequestSync;
@@ -183,6 +192,7 @@ begin
   FOversize.Duplicates := dupIgnore;
   FIgnore := TStringList.Create;
   if Assigned(AIgnore) then FIgnore.Assign(AIgnore);
+  FConfigIgnore := TStringList.Create;
   FWatcher := CreateFileWatcher(FLocalPath, FIgnore);
   FWatcher.OnChanged := @OnWatchChange;
 end;
@@ -190,10 +200,17 @@ end;
 destructor TRepoWorker.Destroy;
 begin
   FWatcher.Free;
+  FConfigIgnore.Free;
   FIgnore.Free;
   FOversize.Free;
   FLock.Free;
   inherited Destroy;
+end;
+
+procedure TRepoWorker.SetConfigIgnore(AGlobs: TStrings);
+begin
+  FConfigIgnore.Clear;
+  if Assigned(AGlobs) then FConfigIgnore.Assign(AGlobs);
 end;
 
 procedure TRepoWorker.OnWatchChange(Sender: TObject);
@@ -320,6 +337,11 @@ begin
           Log.Warn('worker', FName + ': git-lfs not installed; files over ' +
             '100 MB cannot be synced (install git-lfs)');
       end;
+      // Mirror the configured ignore patterns into git. They already keep the
+      // watcher from waking on these files; without this they would still be
+      // swept into a commit by `add -A` whenever something else changed.
+      WriteIgnoreGlobs(git, FConfigIgnore);
+
       // When LFS can absorb oversized files, drop any block a previous run left
       // behind *first*: an excluded path is invisible to `git status`, so the
       // LFS scan below would miss it and the file would then stage as a raw

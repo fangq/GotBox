@@ -35,6 +35,7 @@ uses
   gboxsuper,
   gboxsync,
   gboxengine,
+  gboxexclude,
   gboxstatusmodel;
 
 var
@@ -130,8 +131,9 @@ var
   cfg2: TGotConfig;
   status2: TStatusModel;
   engine2: TSyncEngine;
-  g2, gsync: TGitRunner;
+  g2, gsync, gRoot: TGitRunner;
   rr: TGitResult;
+  ignoreBlock: TStringList;
 
   { Mark a submodule automatic in ACfg (the dialog default is managed; these
     integration checks assert the classic auto add/commit/push behaviour). }
@@ -201,6 +203,24 @@ begin
   Check(rootOK, 'loose root file synced to .gotbox');
   Check(subOK, 'submodule file synced to its own upstream');
 
+  // The engine mirrors the user's ignore globs into the root's exclude file.
+  // The worker's watcher list also holds the submodule folder names (so root
+  // changes don't fire for submodule edits) -- those must NOT leak in here: a
+  // submodule is tracked content, and ignoring its folder would stop it syncing
+  // as plain files if it were ever unlinked.
+  ignoreBlock := TStringList.Create;
+  gRoot := TGitRunner.Create(root);
+  try
+    ReadExcludeSection(gRoot, IGNORE_BEGIN, IGNORE_END, ignoreBlock);
+    Check(ignoreBlock.IndexOf('*.tmp') >= 0,
+      'configured ignore globs reached .git/info/exclude');
+    Check(ignoreBlock.IndexOf('proj') < 0,
+      'the submodule name did NOT leak into the ignore block');
+  finally
+    gRoot.Free;
+    ignoreBlock.Free;
+  end;
+
   // ---- fresh machine: a plain (non-recursive) clone of the superproject brings
   // the submodule's gitlink + .gitmodules but leaves its working tree empty and
   // uninitialized -- the engine must auto-init/check it out so it can sync,
@@ -251,12 +271,13 @@ begin
     Check((not rr.Ok) or (Pos('proj', rr.StdOut) = 0),
       'deleted submodule unlinked from .gitmodules');
     rr := gsync.Git(['ls-files', '--stage']);
-    Check(Pos(#9 + 'proj', rr.StdOut) = 0, 'deleted submodule gitlink removed from index');
+    Check(Pos(#9 + 'proj', rr.StdOut) = 0,
+      'deleted submodule gitlink removed from index');
   finally
     gsync.Free;
   end;
-  Check(DirectoryExists(IncludeTrailingPathDelimiter(root) + '.git' + PathDelim +
-    'modules' + PathDelim + 'proj'),
+  Check(DirectoryExists(IncludeTrailingPathDelimiter(root) + '.git' +
+    PathDelim + 'modules' + PathDelim + 'proj'),
     'submodule repository KEPT (.git/modules/proj still present)');
 
   cfg.Free;

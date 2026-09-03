@@ -33,6 +33,8 @@ uses
   gboxlog,
   gboxgitrunner,
   gboxlfs,
+  gboxexclude,
+  gboxconfigstore,
   gboxrepoworker,
   gboxsync;
 
@@ -469,6 +471,102 @@ var
     end;
   end;
 
+  { A5: the configured ignore globs must keep matching files out of COMMITS, not
+    just out of the watcher's events -- otherwise `add -A` sweeps every editor
+    backup and OS metadata file into the repo the moment anything else changes. }
+  procedure TestIgnoreGlobs(const ABase: string);
+  var
+    dir, staged: string;
+    git: TGitRunner;
+    globs, oversize, excl: TStringList;
+
+    procedure Touch(const ARel: string);
+    begin
+      ForceDirectories(ExtractFilePath(IncludeTrailingPathDelimiter(dir) + ARel));
+      WriteBinary(IncludeTrailingPathDelimiter(dir) + ARel, [Ord('x')]);
+    end;
+
+  begin
+    WriteLn('-- A5: ignore globs reach git, not just the watcher');
+    dir := IncludeTrailingPathDelimiter(ABase) + 'ignore';
+    ForceDirectories(dir);
+    with TGitRunner.Create(dir) do
+    try
+      Git(['init', '-b', 'main']);
+    finally
+      Free;
+    end;
+    SetIdentity(dir, 'ig');
+
+    Touch('notes.txt');            // real content, must sync
+    Touch('notes.txt~');           // editor backup
+    Touch('~$report.docx');        // MS Office lock file
+    Touch('.~lock.report.odt#');   // LibreOffice lock file
+    Touch('#autosave#');           // emacs auto-save ('#' also starts a comment)
+    Touch('.DS_Store');            // macOS metadata
+    Touch('deep/sub/Thumbs.db');   // OS metadata, at depth
+    Touch('deep/sub/keep.md');     // real content, at depth
+    Touch('download.part');        // half-finished download
+
+    git := TGitRunner.Create(dir);
+    globs := TStringList.Create;
+    oversize := TStringList.Create;
+    excl := TStringList.Create;
+    try
+      AddDefaultIgnoreGlobs(globs);
+      Check(globs.IndexOf('~$*') >= 0, 'A5: defaults cover MS Office lock files');
+      Check(globs.IndexOf('.DS_Store') >= 0, 'A5: defaults cover macOS metadata');
+
+      // an unrelated managed block and a hand-written line must survive
+      oversize.Add('handwritten.bin');
+      WriteExcludeBlock(git, oversize);
+
+      WriteIgnoreGlobs(git, globs);
+      git.AddAll;
+      staged := git.GitQuiet(['diff', '--cached', '--name-only']).StdOut;
+
+      Check(Pos('notes.txt' + LineEnding, staged) > 0, 'A5: real content is staged');
+      Check(Pos('deep/sub/keep.md', staged) > 0, 'A5: real content at depth is staged');
+      Check(Pos('notes.txt~', staged) = 0, 'A5: editor backup is not staged');
+      Check(Pos('~$report.docx', staged) = 0, 'A5: Office lock file is not staged');
+      Check(Pos('.~lock.report.odt#', staged) = 0,
+        'A5: LibreOffice lock file is not staged');
+      Check(Pos('#autosave#', staged) = 0,
+        'A5: emacs auto-save is not staged (leading # escaped, not a comment)');
+      Check(Pos('.DS_Store', staged) = 0, 'A5: macOS metadata is not staged');
+      Check(Pos('Thumbs.db', staged) = 0, 'A5: OS metadata at depth is not staged');
+      Check(Pos('download.part', staged) = 0, 'A5: partial download is not staged');
+
+      // writing one block must not disturb another
+      oversize.Clear;
+      ReadExcludeBlock(git, oversize);
+      Check(oversize.IndexOf('handwritten.bin') >= 0,
+        'A5: the oversize block survives an ignore-block rewrite');
+
+      // dropping a pattern un-ignores its files again
+      git.GitQuiet(['reset', '-q']);
+      globs.Delete(globs.IndexOf('.DS_Store'));
+      WriteIgnoreGlobs(git, globs);
+      git.AddAll;
+      staged := git.GitQuiet(['diff', '--cached', '--name-only']).StdOut;
+      Check(Pos('.DS_Store', staged) > 0,
+        'A5: a removed pattern stops ignoring its files');
+      Check(Pos('notes.txt~', staged) = 0, 'A5: the other patterns still apply');
+
+      // and clearing the list removes the block outright
+      globs.Clear;
+      WriteIgnoreGlobs(git, globs);
+      excl.Clear;
+      Check(ReadExcludeSection(git, IGNORE_BEGIN, IGNORE_END, excl) = 0,
+        'A5: an empty glob list removes the block');
+    finally
+      excl.Free;
+      oversize.Free;
+      globs.Free;
+      git.Free;
+    end;
+  end;
+
 var
   base: string;
 begin
@@ -482,6 +580,8 @@ begin
   TestBinaryKeepBoth(base);
   TestNonMainBranch(base);
   TestOversizeGuard(base);
+
+  TestIgnoreGlobs(base);
 
   // B1: exponential backoff escalates then caps
   Check(BackoffDelayMs(1, 15000, 300000) = 15000, 'B1: first backoff = base');
