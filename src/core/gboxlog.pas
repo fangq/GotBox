@@ -17,8 +17,14 @@
 
 unit gboxlog;
 
-{ Thread-safe logger: appends to a rotating file and keeps an in-memory ring
-  buffer that the status window can display. Safe to call from any thread. }
+{ Thread-safe logger: appends to a size-capped file and keeps an in-memory ring
+  buffer that the status window can display. Safe to call from any thread.
+
+  The file really is capped, which matters because GotBox runs for weeks at a
+  time and traces every git invocation: at LOG_MAX_BYTES it is rolled to a single
+  ".1" generation and started fresh, so the logs occupy at most twice that and
+  the previous run's tail survives long enough to diagnose whatever just went
+  wrong. }
 
 {$mode objfpc}{$H+}
 
@@ -26,6 +32,10 @@ interface
 
 uses
   Classes, SysUtils, SyncObjs;
+
+const
+  { Roll the log at this size, keeping one previous generation. }
+  LOG_MAX_BYTES = Int64(8) * 1024 * 1024;
 
 type
   TLogLevel = (llDebug, llInfo, llWarn, llError);
@@ -38,9 +48,14 @@ type
     FPath: string;
     FRing: TStringList;
     FRingMax: Integer;
+    FBytes: Int64;             { bytes in the open file; drives the roll }
+    FMaxBytes: Int64;          { roll at this size (only tests pass anything else) }
+    procedure OpenFile;
+    procedure RollIfLarge;
     procedure WriteLine(const ALine: string);
   public
-    constructor Create(const ALogPath: string; ARingMax: Integer = 500);
+    constructor Create(const ALogPath: string; ARingMax: Integer = 500;
+      AMaxBytes: Int64 = LOG_MAX_BYTES);
     destructor Destroy; override;
     procedure Log(ALevel: TLogLevel; const AScope, AMsg: string);
     procedure Debug(const AScope, AMsg: string);
@@ -76,14 +91,34 @@ begin
   FreeAndNil(Log);
 end;
 
-constructor TLogger.Create(const ALogPath: string; ARingMax: Integer);
+constructor TLogger.Create(const ALogPath: string; ARingMax: Integer; AMaxBytes: Int64);
 begin
   inherited Create;
   FLock := TCriticalSection.Create;
   FRing := TStringList.Create;
   FRingMax := ARingMax;
   FPath := ALogPath;
+  FMaxBytes := AMaxBytes;
   FFileOpen := False;
+  OpenFile;
+  RollIfLarge;   // a log left oversized by an earlier run is rolled at startup
+end;
+
+{ Size of APath, or 0 when it does not exist / can't be read. }
+function FileBytes(const APath: string): Int64;
+var
+  sr: TSearchRec;
+begin
+  Result := 0;
+  if FindFirst(APath, faAnyFile, sr) = 0 then
+  begin
+    if (sr.Attr and faDirectory) = 0 then Result := sr.Size;
+    SysUtils.FindClose(sr);
+  end;
+end;
+
+procedure TLogger.OpenFile;
+begin
   try
     ForceDirectories(ExtractFileDir(FPath));
     AssignFile(FFile, FPath);
@@ -92,10 +127,34 @@ begin
     else
       Rewrite(FFile);
     FFileOpen := True;
+    FBytes := FileBytes(FPath);
   except
     { logging must never crash the app; fall back to ring-only }
     FFileOpen := False;
+    FBytes := 0;
   end;
+end;
+
+{ Roll to a single ".1" generation once the file passes the cap. Caller holds
+  the lock (or is the constructor, before anything else can log). }
+procedure TLogger.RollIfLarge;
+var
+  prev: string;
+begin
+  if (FMaxBytes <= 0) or (FBytes < FMaxBytes) then Exit;
+  prev := FPath + '.1';
+  try
+    if FFileOpen then
+    begin
+      CloseFile(FFile);
+      FFileOpen := False;
+    end;
+    DeleteFile(prev);            // only one generation is kept
+    RenameFile(FPath, prev);
+  except
+    { a failed roll must not take the app down: fall through and reopen }
+  end;
+  OpenFile;
 end;
 
 destructor TLogger.Destroy;
@@ -119,6 +178,10 @@ begin
     try
       WriteLn(FFile, ALine);
       Flush(FFile);
+      // count rather than stat: this runs on every line, and a git-traced
+      // session writes a great many of them
+      Inc(FBytes, Length(ALine) + 2);
+      RollIfLarge;
     except
       FFileOpen := False;
     end;

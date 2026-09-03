@@ -30,25 +30,9 @@ GotBoxOverlay.dll
 # built macOS Finder Sync extension bundle (packaging/macos/build-appex.sh)
 GotBoxFinder.appex/
 
-# console test binaries + their build dir
-/tests/testgit
-/tests/testauth
-/tests/testcred
-/tests/testoauth
-/tests/testlink
-/tests/testworker
-/tests/testsync
-/tests/testrobust
-/tests/testrecover
-/tests/testfilestatus
-/tests/testoverlayipc
-/tests/testhistory
-/tests/testremote
-/tests/testsuper
-/tests/teststray
-/tests/testengine
-/tests/testmultisync
-/tests/testrootlock
-/tests/teste2e
-/tests/testtags
+# console test binaries + their build dir. Matched by pattern, not listed one
+# by one: a per-test list silently leaves every NEW test's binary untracked-but-
+# visible until someone remembers to come back here.
+/tests/test*
+!/tests/test*.lpr
 /tests/lib/
