@@ -30,6 +30,11 @@ jobs:
         uses: gcarreno/setup-lazarus@v3.4.1
         with:
           lazarus-version: stable
+          # The installer comes from SourceForge, whose mirrors are wildly
+          # inconsistent: one download in this job took 22 minutes while its two
+          # siblings took 4 seconds each, and that toll was paid by every job of
+          # every push. Cache the installer files so only a version bump pays it.
+          with-cache: true
 
       - name: Tool versions
         shell: bash
@@ -89,11 +94,21 @@ jobs:
         uses: gcarreno/setup-lazarus@v3.4.1
         with:
           lazarus-version: stable
-      # best-effort: JCF is built from the Lazarus component sources, whose path
-      # varies by installer; don't fail the workflow if it can't be located.
+          # The installer comes from SourceForge, whose mirrors are wildly
+          # inconsistent: one download in this job took 22 minutes while its two
+          # siblings took 4 seconds each, and that toll was paid by every job of
+          # every push. Cache the installer files so only a version bump pays it.
+          with-cache: true
+      # Building JCF is best-effort: it comes from the Lazarus component sources,
+      # whose path varies by installer. The CHECK is not -- a real formatting
+      # difference has to fail, or the job only looks like it is guarding.
       - name: Build JCF formatter
         continue-on-error: true
         run: tools/install-jcf.sh
       - name: Check formatting
-        continue-on-error: true
-        run: make format-check
+        run: |
+          if [ ! -x "$HOME/.local/bin/jcf" ]; then
+            echo "::warning::JCF could not be built here; skipping the format check"
+            exit 0
+          fi
+          make format-check

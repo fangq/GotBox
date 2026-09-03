@@ -171,9 +171,16 @@ begin
 end;
 
 function TOverlayHandler.QueryInterface(constref iid: TGUID; out obj): LongInt; stdcall;
+var
+  supported: Boolean;
 begin
-  if SameGuid(iid, IID_IUnknown) or
-    SameGuid(iid, IID_IShellIconOverlayIdentifier) then
+  // Kept on its own line deliberately: JCF's line-wrapping is not idempotent for
+  // a two-call boolean inside `if`, so writing it that way makes the formatter
+  // flip between two layouts and `make format-check` can never pass.
+  supported := SameGuid(iid, IID_IUnknown);
+  if not supported then
+    supported := SameGuid(iid, IID_IShellIconOverlayIdentifier);
+  if supported then
   begin
     if GetInterface(iid, obj) then Exit(S_OK);
   end;

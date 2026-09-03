@@ -37,6 +37,11 @@ jobs:
         uses: gcarreno/setup-lazarus@v3.4.1
         with:
           lazarus-version: stable
+          # The installer comes from SourceForge, whose mirrors are wildly
+          # inconsistent: one download in this job took 22 minutes while its two
+          # siblings took 4 seconds each, and that toll was paid by every job of
+          # every push. Cache the installer files so only a version bump pays it.
+          with-cache: true
 
       - name: Install UPX
         run: sudo apt-get update && sudo apt-get install -y upx-ucl
@@ -61,10 +66,19 @@ jobs:
           echo "building version $ver"
 
       - name: Compress binaries (UPX)
+        # Compression is a size optimisation, never a release gate. UPX refuses
+        # some toolchain/binary combinations outright (5.2.1 rejects FPC's
+        # threaded executables with "CantPackException: TLS empty region"), and a
+        # slightly larger installer beats no installer. Pack what packs, verify
+        # only that, and ship anything it declined uncompressed.
         run: |
-          upx --best --lzma gotbox gotboxd
-          upx -t gotbox
-          upx -t gotboxd
+          for f in gotbox gotboxd; do
+            if upx --best --lzma "$f"; then
+              upx -t "$f"
+            else
+              echo "::warning::upx declined $f; shipping it uncompressed"
+            fi
+          done
 
       - name: Build .deb
         run: |
@@ -130,6 +144,11 @@ jobs:
         uses: gcarreno/setup-lazarus@v3.4.1
         with:
           lazarus-version: stable
+          # The installer comes from SourceForge, whose mirrors are wildly
+          # inconsistent: one download in this job took 22 minutes while its two
+          # siblings took 4 seconds each, and that toll was paid by every job of
+          # every push. Cache the installer files so only a version bump pays it.
+          with-cache: true
 
       - name: Generate project resource
         shell: bash
@@ -164,11 +183,16 @@ jobs:
       # users allow it to run until the app is signed.
       - name: Compress binaries (UPX)
         shell: bash
+        # See the Linux job: best-effort, never a release gate. This is the step
+        # that blocked the Windows installer once upx reached 5.2.1.
         run: |
-          upx --best --lzma gotbox.exe gotboxd.exe GotBoxOverlay.dll
-          upx -t gotbox.exe
-          upx -t gotboxd.exe
-          upx -t GotBoxOverlay.dll
+          for f in gotbox.exe gotboxd.exe GotBoxOverlay.dll; do
+            if upx --best --lzma "$f"; then
+              upx -t "$f"
+            else
+              echo "::warning::upx declined $f; shipping it uncompressed"
+            fi
+          done
 
       - name: Compute version
         shell: bash
@@ -256,6 +280,11 @@ jobs:
         uses: gcarreno/setup-lazarus@v3.4.1
         with:
           lazarus-version: stable
+          # The installer comes from SourceForge, whose mirrors are wildly
+          # inconsistent: one download in this job took 22 minutes while its two
+          # siblings took 4 seconds each, and that toll was paid by every job of
+          # every push. Cache the installer files so only a version bump pays it.
+          with-cache: true
 
       - name: Generate project resource
         run: fpcres -of res -o gotbox.res gotbox.rc
