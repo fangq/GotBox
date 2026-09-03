@@ -88,6 +88,11 @@ for t in $TESTS; do
   dur=$(( $(date +%s) - start ))
   if [ "$rc" -eq 0 ]; then
     printf 'PASS  %-12s %2ds\n' "$t" "$dur"
+  elif [ "$rc" -eq 77 ]; then
+    # the test declined to run here (wrong OS, missing prerequisite). Not a
+    # failure, but it must not read as PASS either -- that is how a platform
+    # ends up looking covered by a test it never ran.
+    printf 'SKIP  %-12s %s\n' "$t" "$(grep -a 'SKIP - ' "$OUT/$t.run.log" | tail -1)"
   elif [ "$rc" -eq 124 ]; then
     printf 'TIMEOUT %-10s (>%ss)\n' "$t" "$cap"
     echo "  last STEP: $(grep -a '== STEP:' "$OUT/$t.run.log" | tail -1)"
@@ -99,6 +104,12 @@ for t in $TESTS; do
   else
     printf 'FAIL  %-12s (exit %d)\n' "$t" "$rc"
     echo "  last STEP: $(grep -a '== STEP:' "$OUT/$t.run.log" | tail -1)"
+    # Name the failing assertions FIRST. The plain tail is often nothing but
+    # git-trace lines, which is how a CI failure can end up showing everything
+    # except which check actually broke.
+    echo "  --- failed checks ---"
+    grep -a 'FAIL - ' "$OUT/$t.run.log" | head -20
+    echo "  --- tail ---"
     tail -25 "$OUT/$t.run.log"
     fail=1
   fi

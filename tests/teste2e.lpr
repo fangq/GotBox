@@ -34,8 +34,19 @@ program teste2e;
 
 uses
   {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
-  SysUtils, Classes, Process,
-  gboxconfigstore, gboxgitrunner, gboxsuper, gboxrootlock;
+  SysUtils,
+  Classes,
+  Process,
+  gboxconfigstore,
+  gboxgitrunner,
+  gboxsuper,
+  gboxrootlock;
+
+const
+  { Exit code meaning "this test did not run here" -- run.sh renders it as SKIP
+    rather than PASS, so a platform that never exercises this test cannot look
+    covered. 77 is the long-standing autotools convention for a skipped test. }
+  SKIP_EXIT = 77;
 
 var
   failures: Integer = 0;
@@ -159,14 +170,14 @@ var
     if AProc = nil then Exit;
     try
       if AProc.Running then
-        {$IFDEF UNIX}
+      {$IFDEF UNIX}
         // explicit SIGTERM so the daemon runs its clean-shutdown path and
         // RELEASES its root lock (TProcess.Terminate doesn't deliver a clean
         // SIGTERM here, leaving a fresh lock that a rapid restart would refuse)
         FpKill(AProc.ProcessID, SIGTERM);
         {$ELSE}
         AProc.Terminate(0);
-        {$ENDIF}
+      {$ENDIF}
     except
     end;
     for i := 1 to 50 do
@@ -183,8 +194,8 @@ var
   var
     store: TConfigStore;
   begin
-    store := TConfigStore.Create(IncludeTrailingPathDelimiter(base) + ACfgSub +
-      PathDelim + 'gotbox' + PathDelim + 'config.json');
+    store := TConfigStore.Create(IncludeTrailingPathDelimiter(base) +
+      ACfgSub + PathDelim + 'gotbox' + PathDelim + 'config.json');
     try
       store.Save(ACfg);
     finally
@@ -212,7 +223,8 @@ var
   ready: Boolean;
 
   { True once ACond holds, polling up to ASeconds. }
-  function WaitUntilFile(const AWorkDir, ARel, ASubstr: string; ASeconds: Integer): Boolean;
+  function WaitUntilFile(const AWorkDir, ARel, ASubstr: string;
+    ASeconds: Integer): Boolean;
   var
     s: Integer;
   begin
@@ -244,8 +256,7 @@ begin
   // just exits), and macOS keys the config dir off HOME rather than XDG -- so
   // this binary E2E test is Linux-only; skip cleanly elsewhere.
   WriteLn('  SKIP - binary end-to-end test runs on Linux only');
-  WriteLn('ALL TESTS PASSED');
-  Halt(0);
+  Halt(SKIP_EXIT);
   {$ENDIF}
 
   // ---- locate the gotboxd binary; skip cleanly if it wasn't built ----------
@@ -254,13 +265,13 @@ begin
   begin
     gotboxd := '';
     if FileExists('../gotboxd') then gotboxd := ExpandFileName('../gotboxd')
-    else if FileExists('../gotboxd.exe') then gotboxd := ExpandFileName('../gotboxd.exe');
+    else if FileExists('../gotboxd.exe') then
+      gotboxd := ExpandFileName('../gotboxd.exe');
   end;
   if (gotboxd = '') or (not FileExists(gotboxd)) then
   begin
     WriteLn('  SKIP - gotboxd binary not found (build it: make gotboxd)');
-    WriteLn('ALL TESTS PASSED');
-    Halt(0);
+    Halt(SKIP_EXIT);
   end;
   WriteLn('gotboxd: ', gotboxd);
 
@@ -291,8 +302,8 @@ begin
 
     g := TGitRunner.Create('');
     try
-      Check(g.Clone(ExcludeTrailingPathDelimiter(base) + PathDelim + '.gotbox.git',
-        root2).Ok, 'setup: clone .gotbox for m2');
+      Check(g.Clone(ExcludeTrailingPathDelimiter(base) + PathDelim +
+        '.gotbox.git', root2).Ok, 'setup: clone .gotbox for m2');
     finally
       g.Free;
     end;
@@ -329,8 +340,8 @@ begin
       'm1: add submodule proj (' + detail + ')');
     MarkAuto(cfg, 'proj');            // m1 must auto-commit/push the submodule file
     SaveConfig(cfg, 'cfg1');          // persist the mode for m1's daemon to read
-    WriteTextFile(IncludeTrailingPathDelimiter(root1) + 'proj' + PathDelim +
-      'sfile.txt', 'sub-from-m1');
+    WriteTextFile(IncludeTrailingPathDelimiter(root1) + 'proj' +
+      PathDelim + 'sfile.txt', 'sub-from-m1');
     proc1 := StartDaemon(IncludeTrailingPathDelimiter(base) + 'cfg1',
       IncludeTrailingPathDelimiter(base) + 'data1');
 
@@ -362,7 +373,10 @@ begin
 
     proc3 := StartDaemon(IncludeTrailingPathDelimiter(base) + 'cfgC',
       IncludeTrailingPathDelimiter(base) + 'dataC');   // no --takeover
-    for i := 1 to 24 do begin if not proc3.Running then Break; Sleep(250); end;
+    for i := 1 to 24 do begin
+      if not proc3.Running then Break;
+      Sleep(250);
+    end;
     Check(not proc3.Running,
       'a 2nd daemon on a root another instance manages refuses and exits');
     Check(ReadRootOwner(root1).Machine = 'm1',
@@ -375,14 +389,20 @@ begin
     ready := False;
     for i := 1 to 24 do
     begin
-      if ReadRootOwner(root1).Machine = 'mC' then begin ready := True; Break; end;
+      if ReadRootOwner(root1).Machine = 'mC' then begin
+        ready := True;
+        Break;
+      end;
       Sleep(250);
     end;
     Check(ready, 'a --takeover daemon takes ownership of the shared root');
     ready := False;
     for i := 1 to 160 do   // up to ~40s: the incumbent notices at its next heartbeat
     begin
-      if not proc1.Running then begin ready := True; Break; end;
+      if not proc1.Running then begin
+        ready := True;
+        Break;
+      end;
       Sleep(250);
     end;
     Check(ready, 'the taken-over incumbent daemon (m1) self-stops');
