@@ -62,6 +62,22 @@ var
     end;
   end;
 
+  { True if AOut (a git path list, one per line) contains exactly APath. git
+    always separates them with LF, even on Windows, so never compare against
+    LineEnding; and a substring test would let 'notes.txt' match 'notes.txt~'. }
+  function Lists(const AOut, APath: string): Boolean;
+  var
+    sl: TStringList;
+  begin
+    sl := TStringList.Create;
+    try
+      sl.Text := AOut;
+      Result := sl.IndexOf(APath) >= 0;
+    finally
+      sl.Free;
+    end;
+  end;
+
   procedure WriteBinary(const APath: string; const ABytes: array of Byte);
   var
     fs: TFileStream;
@@ -435,7 +451,8 @@ var
       blocked.Clear;
       Check(UnstageOversize(git, 20, blocked) = 1, 'A1: the grown file is unstaged');
       Check(blocked.IndexOf('grown.txt') >= 0, 'A1: and reported');
-      Check(Pos('grown.txt', git.GitQuiet(['diff', '--cached', '--name-only']).StdOut) = 0, 'A1: the oversize change is no longer staged');
+      Check(Pos('grown.txt', git.GitQuiet(['diff', '--cached', '--name-only']).StdOut) =
+        0, 'A1: the oversize change is no longer staged');
       // the point of unstaging rather than removing: the file is still in the
       // repo at its previous content, so it is not deleted from other machines
       Check(Trim(git.GitQuiet(['ls-files', '--', 'grown.txt']).StdOut) = 'grown.txt',
@@ -454,7 +471,8 @@ var
       UnstageOversize(git, 20, blocked);
       Check(blocked.IndexOf('small.txt') < 0, 'A1: a small staged change is left alone');
       Check(blocked.IndexOf('grown.txt') >= 0, 'A1: the grown file is caught again');
-      Check(Pos('small.txt', git.GitQuiet(['diff', '--cached', '--name-only']).StdOut) > 0, 'A1: small.txt is still staged');
+      Check(Pos('small.txt', git.GitQuiet(['diff', '--cached', '--name-only']).StdOut) >
+        0, 'A1: small.txt is still staged');
       git.GitQuiet(['reset', '-q', 'HEAD']);
 
       // once cleared (e.g. git-lfs now available), the block is removed and the
@@ -525,17 +543,18 @@ var
       git.AddAll;
       staged := git.GitQuiet(['diff', '--cached', '--name-only']).StdOut;
 
-      Check(Pos('notes.txt' + LineEnding, staged) > 0, 'A5: real content is staged');
-      Check(Pos('deep/sub/keep.md', staged) > 0, 'A5: real content at depth is staged');
-      Check(Pos('notes.txt~', staged) = 0, 'A5: editor backup is not staged');
-      Check(Pos('~$report.docx', staged) = 0, 'A5: Office lock file is not staged');
-      Check(Pos('.~lock.report.odt#', staged) = 0,
+      Check(Lists(staged, 'notes.txt'), 'A5: real content is staged');
+      Check(Lists(staged, 'deep/sub/keep.md'), 'A5: real content at depth is staged');
+      Check(not Lists(staged, 'notes.txt~'), 'A5: editor backup is not staged');
+      Check(not Lists(staged, '~$report.docx'), 'A5: Office lock file is not staged');
+      Check(not Lists(staged, '.~lock.report.odt#'),
         'A5: LibreOffice lock file is not staged');
-      Check(Pos('#autosave#', staged) = 0,
+      Check(not Lists(staged, '#autosave#'),
         'A5: emacs auto-save is not staged (leading # escaped, not a comment)');
-      Check(Pos('.DS_Store', staged) = 0, 'A5: macOS metadata is not staged');
-      Check(Pos('Thumbs.db', staged) = 0, 'A5: OS metadata at depth is not staged');
-      Check(Pos('download.part', staged) = 0, 'A5: partial download is not staged');
+      Check(not Lists(staged, '.DS_Store'), 'A5: macOS metadata is not staged');
+      Check(not Lists(staged, 'deep/sub/Thumbs.db'),
+        'A5: OS metadata at depth is not staged');
+      Check(not Lists(staged, 'download.part'), 'A5: partial download is not staged');
 
       // writing one block must not disturb another
       oversize.Clear;
@@ -549,9 +568,9 @@ var
       WriteIgnoreGlobs(git, globs);
       git.AddAll;
       staged := git.GitQuiet(['diff', '--cached', '--name-only']).StdOut;
-      Check(Pos('.DS_Store', staged) > 0,
+      Check(Lists(staged, '.DS_Store'),
         'A5: a removed pattern stops ignoring its files');
-      Check(Pos('notes.txt~', staged) = 0, 'A5: the other patterns still apply');
+      Check(not Lists(staged, 'notes.txt~'), 'A5: the other patterns still apply');
 
       // and clearing the list removes the block outright
       globs.Clear;
