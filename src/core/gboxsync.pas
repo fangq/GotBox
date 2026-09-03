@@ -37,7 +37,7 @@ unit gboxsync;
 interface
 
 uses
-  Classes, SysUtils, gboxgitrunner, gboxconflict, gboxlog, gboxlfs;
+  Classes, SysUtils, gboxgitrunner, gboxconflict, gboxlog, gboxlfs, gboxatomic;
 
 type
   TSyncOutcome = (soUpToDate, soPushed, soPulled, soMerged, soConflict,
@@ -273,8 +273,7 @@ begin
       for i := 0 to embedded.Count - 1 do excl.Add('/' + embedded[i] + '/');
       excl.Add(STRAY_END);
     end;
-    ForceDirectories(ExtractFilePath(exclPath));
-    excl.SaveToFile(exclPath);
+    AtomicSaveLines(excl, exclPath);
 
     // unstage the stray tracked gitlinks (removes the broken link from .gotbox);
     // a still-embedded one stays out via the exclude, a de-embedded one then has

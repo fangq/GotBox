@@ -67,7 +67,7 @@ implementation
 uses
   {$IFDEF UNIX}BaseUnix,{$ENDIF}
   {$IFDEF DARWIN}StrUtils,{$ENDIF}
-  Classes, SysUtils, Process, base64, sha1, gboxconfigstore, gboxlog;
+  Classes, SysUtils, Process, base64, sha1, gboxconfigstore, gboxlog, gboxatomic;
 
 type
   TStringArray = array of string;   // secret-tool env override list
@@ -513,11 +513,11 @@ begin
       // user<TAB>scheme<TAB>base64(protected(token))
       f.Add(AUser + #9 + scheme + #9 + EncodeStringBase64(blob));
       path := FallbackFile;
-      f.SaveToFile(path);
-      {$IFDEF UNIX}
-      FpChmod(path, &600);   // owner-only rw
-      {$ENDIF}
-      Result := True;
+      // AOwnerOnly tightens the temp file before the rename, so the token is
+      // never briefly readable at the process umask (chmod-after-write always
+      // leaves that gap), and a crash mid-write leaves the old file intact
+      Result := AtomicSaveLines(f, path, True);
+      if not Result then Exit;
       if Assigned(Log) then
         if scheme = 'dpapi' then
           Log.Info('cred', 'token saved (DPAPI-encrypted file)')

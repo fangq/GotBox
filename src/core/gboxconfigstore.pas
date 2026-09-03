@@ -90,6 +90,9 @@ procedure AddDefaultIgnoreGlobs(AOut: TStrings);
 
 implementation
 
+uses
+  gboxatomic;
+
 { NOTE: do not pull in the Windows unit here -- its GetEnvironmentVariable
   (PChar;PChar;DWord) shadows the single-argument SysUtils one we rely on. }
 
@@ -360,14 +363,9 @@ begin
     end;
     obj.Add('repos', repos);
 
-    ForceDirectories(ExtractFileDir(FPath));
-    txt := TStringList.Create;
-    try
-      txt.Text := obj.FormatJSON;
-      txt.SaveToFile(FPath);
-    finally
-      txt.Free;
-    end;
+    // atomically: a crash or power cut midway through a plain truncate-and-write
+    // would leave the user with no sync configuration at all
+    AtomicSaveText(obj.FormatJSON, FPath);
   finally
     obj.Free;
   end;

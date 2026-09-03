@@ -66,6 +66,9 @@ procedure WriteIgnoreGlobs(AGit: TGitRunner; AGlobs: TStrings);
 
 implementation
 
+uses
+  gboxatomic;
+
 function ExcludeFilePath(AGit: TGitRunner): string;
 var
   gitDir: string;
@@ -130,8 +133,9 @@ begin
       for i := 0 to ALines.Count - 1 do excl.Add(ALines[i]);
       excl.Add(AEnd);
     end;
-    ForceDirectories(ExtractFilePath(exclPath));
-    excl.SaveToFile(exclPath);
+    // atomically: git reads this file while a cycle rewrites it, and a reader
+    // that catches it truncated sees no rules at all
+    AtomicSaveLines(excl, exclPath);
   finally
     excl.Free;
   end;

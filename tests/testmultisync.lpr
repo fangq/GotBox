@@ -164,8 +164,8 @@ var
     p: string;
   begin
     Result := False;
-    p := IncludeTrailingPathDelimiter(ARoot) + '.git' + PathDelim + 'info' +
-      PathDelim + 'exclude';
+    p := IncludeTrailingPathDelimiter(ARoot) + '.git' + PathDelim +
+      'info' + PathDelim + 'exclude';
     if not FileExists(p) then Exit;
     f := TStringList.Create;
     try
@@ -320,8 +320,10 @@ begin
     // gitlink, and spawn a worker for it
     Step('phase 0: wait m2 auto-checkout submodule');
     deadline := Now + EncodeTime(0, 0, 15, 0);
-    repeat Tick until IsGitWorkTree(IncludeTrailingPathDelimiter(root2) + 'proj')
-      or (Now > deadline);
+    repeat
+      Tick
+    until IsGitWorkTree(IncludeTrailingPathDelimiter(root2) + 'proj') or
+      (Now > deadline);
     Check(IsGitWorkTree(IncludeTrailingPathDelimiter(root2) + 'proj'),
       'm2: submodule auto-checked-out on the fresh clone');
 
@@ -391,14 +393,18 @@ begin
       'docs-data');
     DriveOne(engine1, 6);
     deadline := Now + EncodeTime(0, 0, 15, 0);
-    repeat Tick until FileHas(root2, 'docs/a.txt', 'docs-data') or (Now > deadline);
+    repeat
+      Tick
+    until FileHas(root2, 'docs/a.txt', 'docs-data') or (Now > deadline);
     Check(FileHas(root2, 'docs/a.txt', 'docs-data'),
       'm2: received a new top-level folder created on m1');
 
     RmRf(IncludeTrailingPathDelimiter(root1) + 'docs');
     DriveOne(engine1, 6);
     deadline := Now + EncodeTime(0, 0, 15, 0);
-    repeat Tick until Missing(root2, 'docs/a.txt') or (Now > deadline);
+    repeat
+      Tick
+    until Missing(root2, 'docs/a.txt') or (Now > deadline);
     Check(Missing(root2, 'docs/a.txt'),
       'm2: saw the top-level folder deletion from m1');
 
@@ -412,19 +418,21 @@ begin
     Step('phase 5: engine1 stopped; AddSubmodule projects/notes');
     Check(AddSubmodule(cfg1, '', 'projects/notes', 'notesup', '', True, detail),
       'm1: add deep submodule projects/notes (' + detail + ')');
-    WriteFile(IncludeTrailingPathDelimiter(root1) + 'projects' + PathDelim +
-      'notes' + PathDelim + 'note.md', 'deep-sub-data');
+    WriteFile(IncludeTrailingPathDelimiter(root1) + 'projects' +
+      PathDelim + 'notes' + PathDelim + 'note.md', 'deep-sub-data');
     Step('phase 5: restart engine1');
     engine1.Start;
 
     deadline := Now + EncodeTime(0, 0, 20, 0);
     repeat
       Tick;
-      ready := IsGitWorkTree(IncludeTrailingPathDelimiter(root2) + 'projects' +
-        PathDelim + 'notes') and FileHas(root2, 'projects/notes/note.md', 'deep-sub-data');
+      ready := IsGitWorkTree(IncludeTrailingPathDelimiter(root2) +
+        'projects' + PathDelim + 'notes') and
+        FileHas(root2, 'projects/notes/note.md', 'deep-sub-data');
     until ready or (Now > deadline);
-    Check(IsGitWorkTree(IncludeTrailingPathDelimiter(root2) + 'projects' + PathDelim +
-      'notes'), 'm2: checked out the deep submodule added on m1');
+    Check(IsGitWorkTree(IncludeTrailingPathDelimiter(root2) +
+      'projects' + PathDelim + 'notes'),
+      'm2: checked out the deep submodule added on m1');
     Check(FileHas(root2, 'projects/notes/note.md', 'deep-sub-data'),
       'm2: received the deep submodule''s content');
 
@@ -469,9 +477,10 @@ begin
     ForceDirectories(IncludeTrailingPathDelimiter(root1) + 'mixed');
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'mixed' + PathDelim + 'keep.txt',
       'mixed-keep');
-    ForceDirectories(IncludeTrailingPathDelimiter(root1) + 'mixed' + PathDelim + 'stray');
-    with TGitRunner.Create(IncludeTrailingPathDelimiter(root1) + 'mixed' +
-      PathDelim + 'stray') do
+    ForceDirectories(IncludeTrailingPathDelimiter(root1) + 'mixed' +
+      PathDelim + 'stray');
+    with TGitRunner.Create(IncludeTrailingPathDelimiter(root1) +
+        'mixed' + PathDelim + 'stray') do
     try
       Git(['init', '-b', 'main']);
       Git(['config', 'user.name', 's']);
@@ -479,10 +488,10 @@ begin
     finally
       Free;
     end;
-    WriteFile(IncludeTrailingPathDelimiter(root1) + 'mixed' + PathDelim + 'stray' +
-      PathDelim + 'inner.txt', 'stray-inner');
-    with TGitRunner.Create(IncludeTrailingPathDelimiter(root1) + 'mixed' +
-      PathDelim + 'stray') do
+    WriteFile(IncludeTrailingPathDelimiter(root1) + 'mixed' + PathDelim +
+      'stray' + PathDelim + 'inner.txt', 'stray-inner');
+    with TGitRunner.Create(IncludeTrailingPathDelimiter(root1) +
+        'mixed' + PathDelim + 'stray') do
     try
       Git(['add', '-A']);
       Git(['commit', '-m', 'stray inner']);
@@ -492,9 +501,17 @@ begin
 
     DriveOne(engine1, 6);
     deadline := Now + EncodeTime(0, 0, 15, 0);
-    repeat Tick until FileHas(root2, 'mixed/keep.txt', 'mixed-keep') or (Now > deadline);
+    repeat
+      Tick
+    until FileHas(root2, 'mixed/keep.txt', 'mixed-keep') or (Now > deadline);
     Check(FileHas(root2, 'mixed/keep.txt', 'mixed-keep'),
       'm2: received the normal sibling of a stray nested repo');
+    // engine1 keeps cycling under Tick and rewrites this file every cycle, so
+    // poll for the entry instead of sampling once, exactly like the check above
+    deadline := Now + EncodeTime(0, 0, 15, 0);
+    repeat
+      Tick
+    until ExcludeHas(root1, 'mixed/stray') or (Now > deadline);
     Check(ExcludeHas(root1, 'mixed/stray'),
       'm1: nested repo added to .git/info/exclude (not committed as a gitlink)');
     Check(not Tracked(root1, 'mixed/stray'),
@@ -509,7 +526,9 @@ begin
     RmRf(IncludeTrailingPathDelimiter(root1) + 'mixed');
     DriveOne(engine1, 6);
     deadline := Now + EncodeTime(0, 0, 15, 0);
-    repeat Tick until Missing(root2, 'mixed/keep.txt') or (Now > deadline);
+    repeat
+      Tick
+    until Missing(root2, 'mixed/keep.txt') or (Now > deadline);
     Check(Missing(root2, 'mixed/keep.txt'),
       'm2: saw deletion of a top folder that had held a nested repo');
 
@@ -523,7 +542,8 @@ begin
 
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'offline_add.txt',
       'added-while-m2-offline');
-    DeleteFile(IncludeTrailingPathDelimiter(root1) + 'watch.txt');  // (synced in phase 3)
+    DeleteFile(IncludeTrailingPathDelimiter(root1) + 'watch.txt');
+    // (synced in phase 3)
     DriveOne(engine1, 6);   // m1 commits+pushes these while m2 is offline
 
     Step('phase 8: AddSubmodule offsub while m2 offline (stop engine1)');
@@ -560,8 +580,8 @@ begin
       Step('phase 8: catch-up tick ' + IntToStr(tickN));   // last line if a Tick hangs
       Tick;
       ready := FileHas(root2, 'offline_add.txt', 'added-while-m2-offline') and
-        Missing(root2, 'watch.txt') and
-        IsGitWorkTree(IncludeTrailingPathDelimiter(root2) + 'offsub') and
+        Missing(root2, 'watch.txt') and IsGitWorkTree(
+        IncludeTrailingPathDelimiter(root2) + 'offsub') and
         FileHas(root2, 'offsub/o.txt', 'offline-sub-data') and
         (not SubmoduleRegistered(root2, 'projects/notes')) and
         (not Tracked(root2, 'projects/notes'));
@@ -613,8 +633,8 @@ begin
     // and thrash), then let m2/m3 fast-forward it in.
     Step('phase 9: m1 -> {m2,m3} fan-out (root + submodule)');
     WriteFile(IncludeTrailingPathDelimiter(root1) + 'tw_root.txt', 'tw-from-m1');
-    WriteFile(IncludeTrailingPathDelimiter(root1) + 'offsub' + PathDelim +
-      'tw_sub.txt', 'tw-sub-from-m1');
+    WriteFile(IncludeTrailingPathDelimiter(root1) + 'offsub' +
+      PathDelim + 'tw_sub.txt', 'tw-sub-from-m1');
     DriveOne(engine1, 8);
     deadline := Now + EncodeTime(0, 0, 20, 0);
     repeat
