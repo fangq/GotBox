@@ -55,8 +55,12 @@ function AtomicSaveText(const AText, APath: string;
 implementation
 
 uses
+ { NOTE: do not pull in the Windows unit here. Its DeleteFile(PChar) shadows the
+    SysUtils DeleteFile(string) this unit calls, and the file only fails to
+    compile on Windows -- see the same warning in gboxconfigstore. BaseUnix is
+    needed for FpChmod; the pid comes from SysUtils, which has it on every
+    target. }
   {$IFDEF UNIX}BaseUnix,{$ENDIF}
-  {$IFDEF WINDOWS}Windows,{$ENDIF}
   gboxlog;
 
 var
@@ -66,20 +70,10 @@ var
   filesystem to be atomic, so a system temp dir is not an option. PID plus a
   counter keeps two processes (and two threads) from picking the same name. }
 function TempNameFor(const APath: string): string;
-var
-  pid: Integer;
 begin
-  {$IFDEF UNIX}
-  pid := FpGetpid;
-  {$ELSE}
-  {$IFDEF WINDOWS}
-  pid := GetCurrentProcessId;
-  {$ELSE}
-  pid := 0;
-  {$ENDIF}
-  {$ENDIF}
   Inc(TmpCounter);
-  Result := APath + '.' + IntToHex(pid, 4) + IntToHex(TmpCounter, 4) + '.tmp';
+  Result := APath + '.' + IntToHex(GetProcessID, 4) +
+    IntToHex(TmpCounter, 4) + '.tmp';
 end;
 
 function AtomicSaveLines(ALines: TStrings; const APath: string;

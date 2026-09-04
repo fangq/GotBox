@@ -47,17 +47,24 @@ var
     end;
   end;
 
+  { Several checks read the log while the logger still has it open. Windows can
+    refuse that with a sharing violation, which would abort the test rather than
+    fail a check, so treat an unreadable file as "unknown size". }
   function Bytes(const APath: string): Int64;
   var
     f: TFileStream;
   begin
     Result := -1;
     if not FileExists(APath) then Exit;
-    f := TFileStream.Create(APath, fmOpenRead or fmShareDenyNone);
     try
-      Result := f.Size;
-    finally
-      f.Free;
+      f := TFileStream.Create(APath, fmOpenRead or fmShareDenyNone);
+      try
+        Result := f.Size;
+      finally
+        f.Free;
+      end;
+    except
+      Result := -1;
     end;
   end;
 
@@ -69,8 +76,12 @@ var
     if not FileExists(APath) then Exit;
     sl := TStringList.Create;
     try
-      sl.LoadFromFile(APath);
-      Result := Pos(ASubstr, sl.Text) > 0;
+      try
+        sl.LoadFromFile(APath);
+        Result := Pos(ASubstr, sl.Text) > 0;
+      except
+        Result := False;   // see Bytes: an open file may be unreadable on Windows
+      end;
     finally
       sl.Free;
     end;
