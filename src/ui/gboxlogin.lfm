@@ -1,97 +1,188 @@
 object LoginForm: TLoginForm
   Left = 0
-  Height = 300
+  Height = 440
   Top = 0
-  Width = 420
+  Width = 460
   BorderStyle = bsDialog
   Caption = 'GotBox - GitHub account'
-  ClientHeight = 300
-  ClientWidth = 420
+  ClientHeight = 440
+  ClientWidth = 460
+  OnCloseQuery = FormCloseQuery
   Position = poScreenCenter
   LCLVersion = '4.2.0.0'
-  object btnDevice: TButton
-    Left = 24
-    Height = 34
-    Top = 20
-    Width = 372
-    Caption = 'Sign in with GitHub'
-    OnClick = btnDeviceClick
+  object rgMethod: TRadioGroup
+    Left = 16
+    Height = 52
+    Top = 10
+    Width = 428
+    AutoFill = True
+    Caption = 'Sign in method'
+    ChildSizing.LeftRightSpacing = 6
+    ChildSizing.EnlargeHorizontal = crsHomogenousChildResize
+    ChildSizing.EnlargeVertical = crsHomogenousChildResize
+    ChildSizing.ShrinkHorizontal = crsScaleChilds
+    ChildSizing.ShrinkVertical = crsScaleChilds
+    ChildSizing.Layout = cclLeftToRightThenTopToBottom
+    ChildSizing.ControlsPerLine = 2
+    ClientHeight = 32
+    ClientWidth = 424
+    Columns = 2
+    ItemIndex = 0
+    Items.Strings = (
+      'Sign in with GitHub'
+      'Personal Access Token'
+    )
+    OnClick = rgMethodClick
     TabOrder = 0
   end
-  object lblOr: TLabel
-    Left = 24
-    Height = 16
-    Top = 64
-    Width = 372
-    Alignment = taCenter
-    AutoSize = False
-    Caption = '— or sign in with a Personal Access Token —'
-  end
-  object lblUser: TLabel
-    Left = 24
-    Height = 16
-    Top = 92
-    Width = 110
-    Caption = 'GitHub username'
-  end
-  object eUser: TEdit
-    Left = 24
-    Height = 28
-    Top = 112
-    Width = 372
+  object pnlDevice: TPanel
+    Left = 16
+    Height = 316
+    Top = 70
+    Width = 428
+    BevelOuter = bvNone
+    ClientHeight = 316
+    ClientWidth = 428
     TabOrder = 1
+    object btnDevice: TButton
+      Left = 0
+      Height = 34
+      Top = 2
+      Width = 428
+      Caption = 'Sign in with GitHub'
+      OnClick = btnDeviceClick
+      TabOrder = 0
+    end
+    object lblCode: TLabel
+      Left = 0
+      Height = 16
+      Top = 46
+      Width = 428
+      AutoSize = False
+      Caption = 'One-time code (copy this into the GitHub page):'
+    end
+    object eCode: TEdit
+      Left = 0
+      Height = 44
+      Top = 66
+      Width = 340
+      Alignment = taCenter
+      Font.Height = -24
+      Enabled = False
+      Font.Style = [fsBold]
+      ParentFont = False
+      ReadOnly = True
+      TabOrder = 1
+    end
+    object btnCopyCode: TButton
+      Left = 350
+      Height = 44
+      Top = 66
+      Width = 78
+      Caption = 'Copy'
+      Enabled = False
+      OnClick = btnCopyCodeClick
+      TabOrder = 2
+    end
+    object mDevMsg: TMemo
+      Left = 0
+      Height = 160
+      Top = 120
+      Width = 428
+      BorderStyle = bsNone
+      ParentColor = True
+      ReadOnly = True
+      ScrollBars = ssAutoVertical
+      TabOrder = 3
+      WordWrap = True
+    end
+    object btnDevCancel: TButton
+      Left = 290
+      Height = 30
+      Top = 284
+      Width = 138
+      Caption = 'Cancel sign-in'
+      Enabled = False
+      OnClick = btnDevCancelClick
+      TabOrder = 4
+    end
   end
-  object lblPat: TLabel
-    Left = 24
-    Height = 16
-    Top = 150
-    Width = 160
-    Caption = 'Personal Access Token'
-  end
-  object ePat: TEdit
-    Left = 24
-    Height = 28
-    Top = 170
-    Width = 372
-    EchoMode = emPassword
-    PasswordChar = '*'
+  object pnlPat: TPanel
+    Left = 16
+    Height = 316
+    Top = 70
+    Width = 428
+    BevelOuter = bvNone
+    ClientHeight = 316
+    ClientWidth = 428
     TabOrder = 2
-  end
-  object lblHint: TLabel
-    Left = 24
-    Height = 16
-    Top = 206
-    Width = 372
-    AutoSize = False
-    Caption = 'Token needs the "repo" scope.'
-  end
-  object lnkToken: TLabel
-    Cursor = crHandPoint
-    Left = 24
-    Height = 16
-    Top = 226
-    Width = 180
-    Caption = 'Create a token on GitHub...'
-    Font.Color = clBlue
-    Font.Style = [fsUnderline]
-    ParentFont = False
-    OnClick = lnkTokenClick
+    Visible = False
+    object lblUser: TLabel
+      Left = 0
+      Height = 16
+      Top = 4
+      Width = 110
+      Caption = 'GitHub username'
+    end
+    object eUser: TEdit
+      Left = 0
+      Height = 28
+      Top = 24
+      Width = 428
+      TabOrder = 0
+    end
+    object lblPat: TLabel
+      Left = 0
+      Height = 16
+      Top = 62
+      Width = 160
+      Caption = 'Personal Access Token'
+    end
+    object ePat: TEdit
+      Left = 0
+      Height = 28
+      Top = 82
+      Width = 428
+      EchoMode = emPassword
+      PasswordChar = '*'
+      TabOrder = 1
+    end
+    object lblHint: TLabel
+      Left = 0
+      Height = 16
+      Top = 118
+      Width = 428
+      AutoSize = False
+      Caption = 'Token needs the "repo" scope.'
+    end
+    object lnkToken: TLabel
+      Cursor = crHandPoint
+      Left = 0
+      Height = 16
+      Top = 140
+      Width = 180
+      Caption = 'Create a token on GitHub...'
+      Font.Color = clBlue
+      Font.Style = [fsUnderline]
+      ParentFont = False
+      OnClick = lnkTokenClick
+    end
   end
   object btnValidate: TButton
-    Left = 200
+    Left = 224
     Height = 32
-    Top = 258
-    Width = 130
+    Top = 396
+    Width = 140
     Caption = 'Validate && Save'
     Default = True
     OnClick = btnValidateClick
     TabOrder = 3
   end
   object btnCancel: TButton
-    Left = 338
+    Left = 374
     Height = 32
-    Top = 258
-    Width = 58
+    Top = 396
+    Width = 70
     Cancel = True
     Caption = 'Cancel'
     ModalResult = 2
