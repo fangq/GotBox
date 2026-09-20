@@ -208,7 +208,7 @@ table.cfg .def { font-family: 'JetBrains Mono', monospace; color: var(--accent);
     <h2 class="section-title">Features</h2>
     <div class="feature-grid">
       <div class="feature-card"><div class="feature-icon">🔄</div><h3>Automatic two-way sync</h3><p>Local edits are committed and pushed; remote changes are pulled and merged — all silently in the background.</p></div>
-      <div class="feature-card"><div class="feature-icon">🔒</div><h3>Backed by private git</h3><p>Your files live in repos you own on GitHub (or a self-hosted git server). Full version history comes for free.</p></div>
+      <div class="feature-card"><div class="feature-icon">🔒</div><h3>Backed by private git</h3><p>Your files live in repos you own &mdash; on GitHub, GitLab, your own git server, or an S3 bucket. Full version history comes for free.</p></div>
       <div class="feature-card"><div class="feature-icon">💻</div><h3>Multi-machine</h3><p>Set up the same account on another computer and your files appear there; edits propagate both ways.</p></div>
       <div class="feature-card"><div class="feature-icon">🧩</div><h3>Link projects as submodules</h3><p>Keep distinct repos under one root, each with its own local folder name, each syncing independently.</p></div>
       <div class="feature-card"><div class="feature-icon">🛟</div><h3>Never loses data</h3><p>If a file changed on two machines, GotBox keeps <em>both</em> versions and alerts you to resolve it.</p></div>
@@ -271,7 +271,7 @@ make autostart  <span class="cmt"># also start GotBox on login</span></pre>
         <thead><tr><th>Setting</th><th>Meaning</th><th>Default</th></tr></thead>
         <tbody>
           <tr><td>Root folder</td><td>The synced directory.</td><td class="def">~/GotBox</td></tr>
-          <tr><td>Backend</td><td><code>github</code> (HTTPS + token) or <code>git</code> (self-hosted over SSH).</td><td class="def">github</td></tr>
+          <tr><td>Backend</td><td><code>github</code>, <code>gitlab</code>, <code>git</code> (self-hosted over SSH) or <code>s3</code> (via the git-remote-s3 helper).</td><td class="def">github</td></tr>
           <tr><td>History cap</td><td>Keep about this many recent commits per repo (rolling squash trims older ones).</td><td class="def">30</td></tr>
           <tr><td>Commit debounce</td><td>Quiet time (ms) after the last save before committing — batches a burst into one commit.</td><td class="def">10000</td></tr>
           <tr><td>Pull interval</td><td>How often (s) to check the remote. A cheap <code>ls-remote</code> probe runs each interval; a full fetch only when the remote actually moved.</td><td class="def">15</td></tr>

@@ -161,9 +161,15 @@ See [Building from source](#building-from-source).
 
 ## Getting started
 
-### 1. Connect your GitHub account
+### 1. Choose where your files live
 
-The **Account** window offers two ways to sign in:
+The **Account & storage** window has one tab per backend — **GitHub**,
+**GitLab**, **Self-hosted** and **S3**. Pick a tab, fill it in, and press
+*Save*; that tab becomes the backend GotBox uses.
+
+#### GitHub
+
+Two ways to sign in:
 
 - **Sign in with GitHub (recommended).** Click it and GotBox shows a short code
   (e.g. `WDJB-MJHT`) and opens `github.com/login/device`; enter the code, click
@@ -178,8 +184,20 @@ The **Account** window offers two ways to sign in:
   Settings → Developer settings → Personal access tokens — the Account window has
   a direct link), and paste it in.
 
-> Self-hosted **SSH** backend users skip all of this — that backend uses your SSH
-> keys, no token.
+#### GitLab
+
+Works with **gitlab.com and self-managed instances** — put your server's address
+in the *GitLab server* field (`https://gitlab.example.edu`, a port and a path
+prefix are fine). Create a Personal Access Token with the **`api`** scope (the
+window links straight to the page) and paste it in. Leave *Group namespace*
+blank to use your own projects, or name a group (`team/subgroup`) to create the
+repos there. Browser sign-in is GitHub-only for now.
+
+#### Self-hosted and S3
+
+Neither keeps a token: the **Self-hosted** tab (an `ssh://` base URL or a local
+folder) authenticates with your existing SSH keys, and **S3** uses your ambient
+AWS credentials. Both offer *Test connection* before you save.
 
 ### 2. First launch
 
@@ -321,9 +339,11 @@ Key options (defaults in brackets):
 | Setting | Meaning |
 |---------|---------|
 | **Root folder** | The synced directory. [`~/GotBox`] |
-| **Backend** | `github` (HTTPS + token) or `git` (self-hosted over SSH). [`github`] |
-| **GitHub user** | Your GitHub username. |
+| **Backend** | `github`, `gitlab`, `git` (self-hosted over SSH) or `s3`. Chosen in **Account & storage**, not here. [`github`] |
+| **Account** | Your GitHub/GitLab username (`remoteUser`). Not used by the `git` and `s3` backends. |
 | **SSH base** | For the `git` backend, the base URL, e.g. `ssh://git@host/srv/git`. |
+| **GitLab server** | For the `gitlab` backend, e.g. `https://gitlab.com` or your own instance. |
+| **S3 base** | For the `s3` backend, `s3://bucket/prefix`; plus an optional AWS profile and region. |
 | **Machine name** | Identifies this computer in commit messages / conflict files. [hostname] |
 | **History cap** | Keep about this many recent commits per repo (20–50). [30] |
 | **Commit debounce** | Wait this long (ms) of quiet after the last save before committing (batches a burst of saves into one commit). [10000] |
@@ -358,10 +378,43 @@ watcher. Two things to know:
 
 > **Your token is never stored in this file** — it lives only in the OS keychain.
 
+### GitLab backend
+
+Same model as GitHub — one private project per synced folder, created through
+GitLab's REST API and pushed over HTTPS with a Personal Access Token (scope
+`api`). Set the server address in **Account & storage → GitLab**; gitlab.com and
+self-managed instances both work, and tokens are stored per server, so the same
+username on two GitLab servers keeps two separate tokens.
+
+### S3 backend
+
+GotBox can keep the repos in an **S3 bucket**. Git has no S3 transport of its
+own, so this needs the third-party [`git-remote-s3`][grs3] helper:
+
+```sh
+pipx install git-remote-s3      # or: python3 -m pip install --user git-remote-s3
+```
+
+Then set `s3://your-bucket/optional-prefix` in **Account & storage → S3**.
+Points worth knowing:
+
+- **The bucket must already exist** — GotBox never creates one.
+- **Credentials come from the normal AWS chain** (environment, `~/.aws`
+  profile, SSO). GotBox stores only the profile name, never an access key.
+- **Git LFS is disabled** on this backend: there is no LFS endpoint behind an
+  `s3://` remote, so a tracked file would become a pointer whose contents can
+  never be uploaded.
+- **Polling is slower** — at most once a minute, since every check starts the
+  helper process — so changes from another machine can take that long to appear.
+- The helper is a separate project; if two machines push the same branch before
+  either fetches, it can need its own `git-remote-s3 doctor` repair step.
+
+[grs3]: https://github.com/awslabs/git-remote-s3
+
 ### Self-hosted / SSH backend
 
-Prefer your own git server over GitHub? In **Settings**, set the backend to
-`git` and provide the SSH base URL. GotBox then uses your SSH keys (no token
+Prefer your own git server? In **Account & storage → Self-hosted**, give the
+SSH base URL (or a local folder). GotBox then uses your SSH keys (no token
 needed); repos are created as bare repositories under that base.
 
 ---

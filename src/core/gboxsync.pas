@@ -37,7 +37,8 @@ unit gboxsync;
 interface
 
 uses
-  Classes, SysUtils, gboxgitrunner, gboxconflict, gboxlog, gboxlfs, gboxatomic;
+  Classes, SysUtils, gboxgitrunner, gboxconflict, gboxlog, gboxlfs,
+  gboxbackend, gboxatomic;
 
 type
   TSyncOutcome = (soUpToDate, soPushed, soPulled, soMerged, soConflict,
@@ -61,6 +62,13 @@ function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
 function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
   out ADetail: string; AConflicts, AChanged: TStrings;
   const ABranch: string = 'main'): TSyncOutcome; overload;
+{ As above, but told which backend this repo pushes to: AHardLimitBytes is the
+  per-file push limit (0 = the backend has none, so the oversize guard is
+  skipped) and AKind picks the wording of a size rejection. The overloads above
+  assume GitHub, which is what every caller meant before there were others. }
+function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
+  out ADetail: string; AConflicts, AChanged: TStrings; const ABranch: string;
+  AKind: TBackendKind; AHardLimitBytes: Int64): TSyncOutcome; overload;
 
 { "Managed" cycle for a submodule the user commits by hand: transport committed
   state only. NEVER stages, commits, creates a merge commit, resets, or force-
@@ -308,6 +316,14 @@ end;
 function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
   out ADetail: string; AConflicts, AChanged: TStrings;
   const ABranch: string): TSyncOutcome;
+begin
+  Result := RunSyncCycle(AGit, AMachine, ADetail, AConflicts, AChanged, ABranch,
+    bkGitHub, GITHUB_FILE_LIMIT);
+end;
+
+function RunSyncCycle(AGit: TGitRunner; const AMachine: string;
+  out ADetail: string; AConflicts, AChanged: TStrings; const ABranch: string;
+  AKind: TBackendKind; AHardLimitBytes: Int64): TSyncOutcome;
 var
   r, mr: TGitResult;
   behind, ahead: Integer;
@@ -346,13 +362,14 @@ var
     if AGit.HasUncommittedChanges then
     begin
       AGit.AddAll;
-      // Last line of defence against GitHub's 100 MB limit: a file that is
-      // already tracked and has grown past it is staged by `add -A` regardless
-      // of the exclude block (ignore rules do not apply to tracked paths), and
-      // committing it would make every push fail. Unstage it here, after
-      // staging and before the commit, so the path keeps its last committed
-      // content instead of being dropped from the repo.
-      UnstageOversize(AGit, GITHUB_FILE_LIMIT, nil);
+      // Last line of defence against the backend's per-file limit: a file that
+      // is already tracked and has grown past it is staged by `add -A`
+      // regardless of the exclude block (ignore rules do not apply to tracked
+      // paths), and committing it would make every push fail. Unstage it here,
+      // after staging and before the commit, so the path keeps its last
+      // committed content instead of being dropped from the repo. A backend
+      // with no limit (self-hosted, S3) skips this entirely.
+      UnstageOversize(AGit, AHardLimitBytes, nil);
       Collect(['diff', '--cached', '--name-only']);   // local edits being synced
       r := AGit.CommitAll(CommitMsg(AMachine));
       Result := r.Ok;
@@ -382,15 +399,15 @@ var
     Result := r.Ok;
     if not Result then
     begin
-      // give GitHub's 100 MB rejection an actionable message instead of raw gunk
-      // (GH001 / "this exceeds GitHub's file size limit of 100.00 MB")
-      e := LowerCase(r.StdErr);
-      if (Pos('gh001', e) > 0) or (Pos('file size limit', e) > 0) or
-        (Pos('exceeds github', e) > 0) then
-        ADetail := 'a file exceeds GitHub''s 100 MB limit; install git-lfs or ' +
-          'remove the file (' + Trim(r.StdErr) + ')'
+      // give a size rejection an actionable message instead of raw gunk
+      // (GH001 / "this exceeds GitHub's file size limit of 100.00 MB", or
+      // GitLab's "maximum allowed size" / HTTP 413)
+      e := Trim(r.StdErr);
+      if IsSizeRejection(AKind, e) then
+        ADetail := 'a file is too large for ' + BackendLabel(AKind) +
+          '; install git-lfs or remove the file (' + e + ')'
       else
-        ADetail := 'push failed: ' + Trim(r.StdErr);
+        ADetail := 'push failed: ' + e;
     end;
   end;
 

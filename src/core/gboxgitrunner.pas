@@ -64,6 +64,7 @@ type
     FAuthUser: string;
     FAuthToken: string;
     FQuiet: Boolean;   // suppress warn-logging for expected-to-fail probes
+    FExtraEnv: TStringList;   // extra NAME=VALUE for the git child
     FDefaultTimeoutMs: Integer;
     // applied to ops that don't pass their own (0 = untimed)
     { When AOutStream is given, stdout bytes are streamed to it verbatim (binary
@@ -75,6 +76,7 @@ type
   public
     { AWorkDir is the repo working tree (may be empty for clone/global ops). }
     constructor Create(const AWorkDir: string);
+    destructor Destroy; override;
     { Locates the git executable on PATH and common install dirs.
       Returns '' if not found. }
     class function DetectGit: string;
@@ -93,6 +95,13 @@ type
       Set by long-lived callers (the sync worker) so a stuck local git op can't
       block the worker thread -- and thus engine.Stop's join -- indefinitely. }
     property DefaultTimeoutMs: Integer read FDefaultTimeoutMs write FDefaultTimeoutMs;
+
+    { Extra 'NAME=VALUE' entries for the git child, applied after the standard
+      overrides. For backends whose transport helper needs its own environment
+      -- the S3 remote helper's AWS_PROFILE/AWS_REGION, and a PATH that reaches
+      the helper at all. Never put a secret here: a process environment is
+      readable by the user's other processes on some systems. nil clears. }
+    procedure SetExtraEnv(AEnv: TStrings);
 
     // raw passthrough
     function Git(const AArgs: array of string): TGitResult;
@@ -243,6 +252,19 @@ begin
   // one stuck git op there froze the engine's main thread indefinitely (the
   // intermittent Windows-CI hang in testmultisync's phase-8 catch-up).
   FDefaultTimeoutMs := GIT_DEFAULT_TIMEOUT_MS;
+  FExtraEnv := TStringList.Create;
+end;
+
+destructor TGitRunner.Destroy;
+begin
+  FExtraEnv.Free;
+  inherited Destroy;
+end;
+
+procedure TGitRunner.SetExtraEnv(AEnv: TStrings);
+begin
+  FExtraEnv.Clear;
+  if Assigned(AEnv) then FExtraEnv.Assign(AEnv);
 end;
 
 { ---- core runner ---- }
@@ -352,6 +374,10 @@ begin
       proc.Environment.Values['GIT_ASKPASS'] := EnsureAskPass;
       proc.Environment.Values['GOTBOX_ASKPASS_PW'] := FAuthToken;
     end;
+    for i := 0 to FExtraEnv.Count - 1 do
+      if FExtraEnv.Names[i] <> '' then
+        proc.Environment.Values[FExtraEnv.Names[i]] :=
+          FExtraEnv.ValueFromIndex[i];
     proc.Options := [poUsePipes, poNoConsole];
 
     if Assigned(Log) then Log.Debug('git', cmdline + ' [' + FWorkDir + ']');

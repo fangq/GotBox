@@ -26,7 +26,7 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, StdCtrls, Spin, Dialogs, gboxmsg,
-  gboxconfigstore;
+  gboxremote, gboxconfigstore;
 
 type
   TConfigForm = class(TForm)
@@ -34,9 +34,8 @@ type
     eRoot: TEdit;
     btnBrowse: TButton;
     lblKind: TLabel;
-    cboKind: TComboBox;
-    lblSsh: TLabel;
-    eSshBase: TEdit;
+    lblBackend: TLabel;
+    btnAccount: TButton;
     lblMachine: TLabel;
     eMachine: TEdit;
     lblCap: TLabel;
@@ -51,10 +50,17 @@ type
     mIgnore: TMemo;
     btnOK: TButton;
     btnCancel: TButton;
+    procedure btnAccountClick(Sender: TObject);
     procedure btnBrowseClick(Sender: TObject);
     procedure btnOKClick(Sender: TObject);
+  private
+    FCfg: TGotConfig;             // the config being edited (for the summary)
+    FOnAccount: TNotifyEvent;
   public
     function Edit(ACfg: TGotConfig): Boolean;
+    { Raised by "Change..."; the main form opens the Account window. Settings
+      does not reach into LoginForm itself, mirroring TStatusForm.OnAccount. }
+    property OnAccount: TNotifyEvent read FOnAccount write FOnAccount;
   end;
 
 var
@@ -63,6 +69,13 @@ var
 implementation
 
 {$R *.lfm}
+
+procedure TConfigForm.btnAccountClick(Sender: TObject);
+begin
+  if not Assigned(FOnAccount) then Exit;
+  FOnAccount(Self);                       // nested modal; the LCL handles it
+  if Assigned(FCfg) then lblBackend.Caption := BackendSummary(FCfg);
+end;
 
 procedure TConfigForm.btnBrowseClick(Sender: TObject);
 var
@@ -93,10 +106,8 @@ begin
     Exit;
   end;   // already open; don't re-ShowModal
   eRoot.Text := ACfg.RootDir;
-  if SameText(ACfg.RemoteKind, 'git') then cboKind.ItemIndex := 1
-  else
-    cboKind.ItemIndex := 0;
-  eSshBase.Text := ACfg.SshBase;
+  FCfg := ACfg;
+  lblBackend.Caption := BackendSummary(ACfg);
   eMachine.Text := ACfg.MachineName;
   seCap.Value := ACfg.HistoryCap;
   seDebounce.Value := ACfg.CommitDebounceMs;
@@ -109,10 +120,7 @@ begin
   if not Result then Exit;
 
   ACfg.RootDir := eRoot.Text;
-  if cboKind.ItemIndex = 1 then ACfg.RemoteKind := 'git'
-  else
-    ACfg.RemoteKind := 'github';
-  ACfg.SshBase := Trim(eSshBase.Text);
+  // the backend itself is chosen in the Account window, not here
   ACfg.MachineName := Trim(eMachine.Text);
   ACfg.HistoryCap := seCap.Value;
   ACfg.CommitDebounceMs := seDebounce.Value;

@@ -31,13 +31,15 @@ interface
 
 uses
   Classes, SysUtils,
-  gboxconfigstore, gboxstatusmodel, gboxrepoworker, gboxsuper, gboxfilestatus;
+  gboxconfigstore, gboxstatusmodel, gboxrepoworker, gboxsuper, gboxbackend,
+  gboxfilestatus;
 
 type
   TSyncEngine = class
   private
     FCfg: TGotConfig;
     FToken: string;
+    FRemoteEnv: TStringList;   // transport-helper environment (S3); usually empty
     FStatus: TStatusModel;
     FWorkers: array of TRepoWorker;
     FRunning: Boolean;
@@ -81,7 +83,7 @@ type
 implementation
 
 uses
-  gboxlog, gboxgitrunner;
+  gboxlog, gboxgitrunner, gboxremote;
 
 { Opt-in engine trace (same GOTBOX_GIT_TRACE switch as the git-op trace) so the
   reconcile Stop/Start and per-worker WaitFor boundaries appear inline with the
@@ -130,6 +132,10 @@ begin
   FToken := AToken;
   FStatus := AStatus;
   FSubNames := TStringList.Create;
+  FRemoteEnv := TStringList.Create;
+  // an S3 remote resolves only when git can find its helper, so every runner
+  // the workers spawn needs that environment
+  CollectRemoteEnv(ACfg, FRemoteEnv);
 end;
 
 destructor TSyncEngine.Destroy;
@@ -138,6 +144,7 @@ begin
   TThread.RemoveQueuedEvents(nil, @DoReconcile);
   Stop;
   FSubNames.Free;
+  FRemoteEnv.Free;
   inherited Destroy;
 end;
 
@@ -226,7 +233,7 @@ begin
     Log.Info('engine', 'checking out submodule ' + AName);
   git := TGitRunner.Create(FCfg.RootDir);
   try
-    git.AuthUser := FCfg.GithubUser;
+    git.AuthUser := RemoteAuthUser(FCfg);
     git.AuthToken := FToken;
     git.DefaultTimeoutMs := GIT_DEFAULT_TIMEOUT_MS;   // don't hang on a stuck checkout
     // --init populates a registered-but-uninitialized submodule; the submodule
@@ -296,13 +303,16 @@ begin
     ignore.Assign(FCfg.IgnoreGlobs);
     if Assigned(AExtraIgnore) then
       ignore.AddStrings(AExtraIgnore);
-    w := TRepoWorker.Create(AName, APath, FCfg.GithubUser, FToken,
+    w := TRepoWorker.Create(AName, APath, FCfg.RemoteUser, FToken,
       FCfg.MachineName, FCfg.CommitDebounceMs, FCfg.GcEveryNCommits,
       FCfg.PullIntervalSec, FCfg.HistoryCap, FCfg.LfsThresholdMB,
       AAutoSync, FStatus, ignore);
     // the watcher list above also carries submodule names; the exclude file must
     // only ever see the user's own patterns
     w.SetConfigIgnore(FCfg.IgnoreGlobs);
+    // teach the worker which backend it is pushing to: push limit, whether LFS
+    // is usable, the poll floor, and any transport-helper environment
+    w.SetBackend(ParseBackendKind(FCfg.RemoteKind), FRemoteEnv);
     w.OnNotice := FOnNotice;
     w.OnCycleDone := @WorkerCycleDone;
     // only the root's .gitmodules governs the submodule set

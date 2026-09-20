@@ -94,7 +94,7 @@ begin
   cfg := TGotConfig.Create;
   try
     cfg.RootDir := root;
-    cfg.GithubUser := 'tester';
+    cfg.RemoteUser := 'tester';
     linker := TRepoLinker.Create(cfg, '');  // empty token: local file remote
     try
       // first link: init + remote + commit + push (created=True)

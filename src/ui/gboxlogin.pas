@@ -17,23 +17,35 @@
 
 unit gboxlogin;
 
-{ GitHub account window: capture username + Personal Access Token, validate the
-  token, and (from M2 onward) persist the PAT into the OS credential store.
-  In M1 the validation is a stub and only the username is saved to config. }
+{ Account & storage window: pick which backend holds the synced repos and
+  supply whatever it needs -- one tab per backend.
+
+    GitHub      device-flow sign-in, or a Personal Access Token
+    GitLab      a Personal Access Token, on gitlab.com or your own instance
+    Self-hosted an ssh:// base URL or a local folder (your ssh keys do the auth)
+    S3          a bucket, through the git-remote-s3 helper and your AWS profile
+
+  Tokens are validated against the server and written straight to the OS
+  credential store by the worker threads below (keyed per backend, see
+  gboxremote.CredAccount); only non-secret settings go back into the config. }
 
 {$mode objfpc}{$H+}
 
 interface
 
 uses
-  Classes, SysUtils, Forms, Controls, StdCtrls, ExtCtrls, Dialogs, LCLIntf,
-  Graphics, Clipbrd, gboxconfigstore, gboxcredstore, gboxgithubapi, gboxoauth,
-  gboxlog, gboxmsg;
+  Classes, SysUtils, Forms, Controls, StdCtrls, ExtCtrls, ComCtrls, Dialogs,
+  LCLIntf, Graphics, Clipbrd, gboxconfigstore, gboxcredstore, gboxgithubapi,
+  gboxgitlabapi, gboxbackend, gboxremote, gboxoauth, gboxlog, gboxmsg;
 
 type
   TLoginForm = class(TForm)
-    rgMethod: TRadioGroup;
+    pcBackend: TPageControl;
+    tsGitHub: TTabSheet;
+    rgGhMethod: TRadioGroup;
     pnlDevice: TPanel;
+    pnlDevTop: TPanel;
+    pnlDevBottom: TPanel;
     btnDevice: TButton;
     lblCode: TLabel;
     eCode: TEdit;
@@ -47,17 +59,52 @@ type
     ePat: TEdit;
     lblHint: TLabel;
     lnkToken: TLabel;
+    tsGitLab: TTabSheet;
+    lblGlHost: TLabel;
+    eGlHost: TEdit;
+    lblGlUser: TLabel;
+    eGlUser: TEdit;
+    lblGlNs: TLabel;
+    eGlNs: TEdit;
+    lblGlPat: TLabel;
+    eGlPat: TEdit;
+    lblGlHint: TLabel;
+    lnkGlToken: TLabel;
+    mGlMsg: TMemo;
+    tsSelfHosted: TTabSheet;
+    lblSsh: TLabel;
+    eSshBase: TEdit;
+    btnBrowseBase: TButton;
+    mSshHelp: TMemo;
+    tsS3: TTabSheet;
+    lblS3Base: TLabel;
+    eS3Base: TEdit;
+    lblS3Profile: TLabel;
+    eS3Profile: TEdit;
+    lblS3Region: TLabel;
+    eS3Region: TEdit;
+    lblS3Helper: TLabel;
+    mS3Help: TMemo;
+    pnlButtons: TPanel;
+    btnTest: TButton;
     btnValidate: TButton;
     btnCancel: TButton;
+    procedure btnBrowseBaseClick(Sender: TObject);
     procedure btnCopyCodeClick(Sender: TObject);
     procedure btnDevCancelClick(Sender: TObject);
     procedure btnDeviceClick(Sender: TObject);
+    procedure btnTestClick(Sender: TObject);
     procedure btnValidateClick(Sender: TObject);
     procedure FormCloseQuery(Sender: TObject; var CanClose: Boolean);
+    procedure lnkGlTokenClick(Sender: TObject);
     procedure lnkTokenClick(Sender: TObject);
-    procedure rgMethodClick(Sender: TObject);
+    procedure pcBackendChange(Sender: TObject);
+    procedure pcBackendChanging(Sender: TObject; var AllowChange: Boolean);
+    procedure rgGhMethodClick(Sender: TObject);
   private
     FToken: string;
+    FAccount: string;         // credential-store key the token was saved under
+    FS3Ready: Boolean;        // is the git-remote-s3 helper installed?
     FDevCancelled: Boolean;   // user pressed "Cancel sign-in" while polling
     FDevPolling: Boolean;     // a device-flow poll loop is running right now
     FCloseAfterCancel: Boolean;   // close the dialog once the poll has stopped
@@ -65,14 +112,28 @@ type
     { Fills the read-only code box; an empty code greys it (and Copy) out, so
       neither invites a click before a sign-in has produced a code. }
     procedure SetCode(const ACode: string);
-    { Shows the panel that belongs to the selected sign-in method. }
-    procedure ApplyMethod;
+    { The backend the selected tab stands for. }
+    function ActiveKind: TBackendKind;
+    function TabForKind(AKind: TBackendKind): TTabSheet;
+    { Shows the panel that belongs to the selected GitHub sign-in method. }
+    procedure ApplyGhMethod;
+    { Points the bottom buttons at whatever the active tab can do. }
+    procedure ApplyTab;
+    procedure LoadFromConfig(ACfg: TGotConfig);
+    procedure SaveToConfig(ACfg: TGotConfig);
+    { Cheap, local checks for the active tab; complains and focuses the offender
+      on failure. Does not touch the network. }
+    function ValidateActiveTab: Boolean;
+    { Validates a token against GitHub/GitLab on a worker thread and stores it;
+      sets ModalResult on success. }
+    procedure DoTokenValidate(AKind: TBackendKind; const AHost, AToken: string);
   public
-    { Shows the modal login dialog. On OK, writes username into ACfg and keeps
-      the entered token in FToken (for the caller to hand to the credential
-      store in M2). Returns True if the user confirmed. }
+    { Shows the modal dialog. On OK, writes the chosen backend and its settings
+      into ACfg; any token has already gone to the credential store. Returns
+      True if the user confirmed. }
     function RunLogin(ACfg: TGotConfig): Boolean;
     property Token: string read FToken;
+    property Account: string read FAccount;
   end;
 
 var
@@ -81,32 +142,37 @@ var
 implementation
 
 uses
-  DateUtils;
+  DateUtils, gboxgitrunner, gboxsuper;
 
   {$R *.lfm}
 
 type
-  { Runs the blocking GitHub token validation + keyring store off the GUI thread,
-    so the dialog stays responsive (the HTTPS round-trip can take many seconds,
+  { Runs the blocking token validation + keyring store off the GUI thread, so
+    the dialog stays responsive (the HTTPS round-trip can take many seconds,
     especially over a remote link like x2go). The caller pumps the message loop
-    while this runs, then reads the results. }
+    while this runs, then reads the results. Both hosted backends come through
+    here; only the client class and the credential key differ. }
   TValidateThread = class(TThread)
   private
-    FToken: string;
-    FLogin, FErr: string;
+    FKind: TBackendKind;
+    FHost, FToken: string;
+    FLogin, FErr, FAccount: string;
     FValidated, FSaved: Boolean;
   protected
     procedure Execute; override;
   public
-    constructor Create(const AToken: string);
+    constructor Create(AKind: TBackendKind; const AHost, AToken: string);
     property Login: string read FLogin;
     property Err: string read FErr;
+    property Account: string read FAccount;
     property Validated: Boolean read FValidated;
     property Saved: Boolean read FSaved;
   end;
 
-constructor TValidateThread.Create(const AToken: string);
+constructor TValidateThread.Create(AKind: TBackendKind; const AHost, AToken: string);
 begin
+  FKind := AKind;
+  FHost := AHost;
   FToken := AToken;
   FreeOnTerminate := False;   // caller reads results then frees us
   inherited Create(False);    // run now
@@ -114,20 +180,35 @@ end;
 
 procedure TValidateThread.Execute;
 var
-  api: TGitHubApi;
+  gh: TGitHubApi;
+  gl: TGitLabApi;
   cred: TCredStore;
 begin
-  api := TGitHubApi.Create(FToken);
-  try
-    FValidated := api.ValidateToken(FLogin, FErr);
-  finally
-    api.Free;
+  if FKind = bkGitLab then
+  begin
+    gl := TGitLabApi.Create(FToken, FHost);
+    try
+      FValidated := gl.ValidateToken(FLogin, FErr);
+    finally
+      gl.Free;
+    end;
+  end
+  else
+  begin
+    gh := TGitHubApi.Create(FToken);
+    try
+      FValidated := gh.ValidateToken(FLogin, FErr);
+    finally
+      gh.Free;
+    end;
   end;
   if not FValidated then Exit;
-  // Persist the token in the OS credential store keyed by the canonical login.
+  // Persist the token in the OS credential store, keyed so that the same login
+  // on another backend (or another GitLab host) cannot overwrite it.
+  FAccount := CredKey(FKind, FHost, FLogin);
   cred := TCredStore.Create;
   try
-    FSaved := cred.SaveToken(FLogin, FToken);
+    FSaved := cred.SaveToken(FAccount, FToken);
   finally
     cred.Free;
   end;
@@ -141,7 +222,7 @@ type
   private
     FClientId, FDeviceCode: string;
     FInterval, FExpiresIn: Integer;
-    FToken, FLogin, FErr: string;
+    FToken, FLogin, FErr, FAccount: string;
     FStatus: TPollStatus;
     FSaved: Boolean;
   protected
@@ -155,6 +236,7 @@ type
     property Token: string read FToken;
     property Login: string read FLogin;
     property Err: string read FErr;
+    property Account: string read FAccount;
     property Saved: Boolean read FSaved;
   end;
 
@@ -232,14 +314,17 @@ begin
   finally
     api.Free;
   end;
+  FAccount := CredKey(bkGitHub, '', FLogin);
   cred := TCredStore.Create;
   try
-    FSaved := cred.SaveToken(FLogin, FToken);
+    FSaved := cred.SaveToken(FAccount, FToken);
   finally
     cred.Free;
   end;
   FStatus := psSuccess;
 end;
+
+{ ---- form ---- }
 
 procedure TLoginForm.SetBusy(ABusy: Boolean);
 begin
@@ -248,7 +333,11 @@ begin
     Screen.Cursor := crDefault;
   btnDevice.Enabled := not ABusy;
   btnValidate.Enabled := not ABusy;
+  btnTest.Enabled := not ABusy;
   btnCancel.Enabled := not ABusy;
+  // a tab switch mid-validation would leave the result landing on the wrong
+  // backend's fields
+  pcBackend.Enabled := not ABusy;
 end;
 
 procedure TLoginForm.SetCode(const ACode: string);
@@ -258,42 +347,84 @@ begin
   btnCopyCode.Enabled := eCode.Enabled;
 end;
 
-procedure TLoginForm.ApplyMethod;
-const
-  PAT_PANEL_H = 160;   // the PAT fields need far less room than the device panel
-var
-  useDevice: Boolean;
-  y, h: Integer;
+function TLoginForm.ActiveKind: TBackendKind;
 begin
-  useDevice := rgMethod.Visible and (rgMethod.ItemIndex = 0);
-  pnlDevice.Visible := useDevice;
-  pnlPat.Visible := not useDevice;
-  // "Validate & Save" only applies to a hand-typed token; the device flow
-  // finishes by itself once GitHub accepts the code.
-  btnValidate.Visible := not useDevice;
-  // shrink the window around whichever panel is showing, so the PAT form does
-  // not sit above a tall empty gap
-  if useDevice then
-  begin
-    y := pnlDevice.Top;
-    h := pnlDevice.Height;
-  end
+  if pcBackend.ActivePage = tsGitLab then Result := bkGitLab
+  else if pcBackend.ActivePage = tsSelfHosted then Result := bkGit
+  else if pcBackend.ActivePage = tsS3 then Result := bkS3
   else
-  begin
-    y := pnlPat.Top;
-    h := PAT_PANEL_H;
-    pnlPat.Height := h;   // the .lfm sizes both panels alike; trim this one
-  end;
-  btnValidate.Top := y + h + 14;
-  btnCancel.Top := btnValidate.Top;
-  ClientHeight := btnCancel.Top + btnCancel.Height + 14;
-  if not useDevice then
-    ActiveControl := ePat;
+    Result := bkGitHub;
 end;
 
-procedure TLoginForm.rgMethodClick(Sender: TObject);
+function TLoginForm.TabForKind(AKind: TBackendKind): TTabSheet;
 begin
-  ApplyMethod;
+  case AKind of
+    bkGitLab: Result := tsGitLab;
+    bkGit: Result := tsSelfHosted;
+    bkS3: Result := tsS3;
+    else
+      Result := tsGitHub;
+  end;
+end;
+
+procedure TLoginForm.ApplyGhMethod;
+var
+  useDevice: Boolean;
+begin
+  useDevice := rgGhMethod.Visible and (rgGhMethod.ItemIndex = 0);
+  // the two panels share one rect, so this is pure show/hide -- no geometry
+  pnlDevice.Visible := useDevice;
+  pnlPat.Visible := not useDevice;
+  if (not useDevice) and pnlPat.Visible and pnlPat.CanFocus then
+    ActiveControl := ePat;
+  ApplyTab;
+end;
+
+procedure TLoginForm.ApplyTab;
+var
+  kind: TBackendKind;
+  ghDevice: Boolean;
+begin
+  kind := ActiveKind;
+  ghDevice := (kind = bkGitHub) and rgGhMethod.Visible and
+    (rgGhMethod.ItemIndex = 0);
+
+  // the device flow completes by itself, so it has no Save step
+  btnValidate.Visible := not ghDevice;
+  if BackendNeedsToken(kind) then btnValidate.Caption := 'Validate && Save'
+  else
+    btnValidate.Caption := 'Save';
+  // the caption changes width with the backend; keep the button's right edge
+  // pinned next to Cancel rather than letting a long caption clip
+  if BackendNeedsToken(kind) then btnValidate.Width := 140
+  else
+    btnValidate.Width := 90;
+  btnValidate.Left := btnCancel.Left - btnValidate.Width - 8;
+  // only the backends we can probe cheaply offer a test
+  btnTest.Visible := kind in [bkGit, bkS3];
+  btnTest.Left := btnValidate.Left - btnTest.Width - 8;
+  btnValidate.Enabled := not ((kind = bkS3) and not FS3Ready);
+  btnTest.Enabled := btnValidate.Enabled;
+
+  if btnValidate.Visible then DefaultControl := btnValidate
+  else
+    DefaultControl := btnDevice;
+end;
+
+procedure TLoginForm.pcBackendChange(Sender: TObject);
+begin
+  ApplyTab;
+end;
+
+procedure TLoginForm.pcBackendChanging(Sender: TObject; var AllowChange: Boolean);
+begin
+  // a sign-in is in flight on this tab; its result must not land elsewhere
+  AllowChange := not FDevPolling;
+end;
+
+procedure TLoginForm.rgGhMethodClick(Sender: TObject);
+begin
+  ApplyGhMethod;
 end;
 
 procedure TLoginForm.btnCopyCodeClick(Sender: TObject);
@@ -301,6 +432,16 @@ begin
   if eCode.Text = '' then Exit;
   Clipboard.AsText := eCode.Text;
   eCode.SelectAll;
+end;
+
+procedure TLoginForm.btnBrowseBaseClick(Sender: TObject);
+var
+  dir: string;
+begin
+  dir := Trim(eSshBase.Text);
+  if (dir = '') or not DirectoryExists(dir) then dir := GetUserDir;
+  if SelectDirectory('Folder to keep the repositories in', dir, dir) then
+    eSshBase.Text := dir;
 end;
 
 procedure TLoginForm.FormCloseQuery(Sender: TObject; var CanClose: Boolean);
@@ -332,7 +473,7 @@ procedure TLoginForm.btnDeviceClick(Sender: TObject);
 var
   dev: TDeviceCode;
   th: TDeviceThread;
-  err, login, tok: string;
+  err, login, tok, acct: string;
   status: TPollStatus;
   saved: Boolean;
 begin
@@ -388,6 +529,7 @@ begin
     status := th.Status;
     login := th.Login;
     tok := th.Token;
+    acct := th.Account;
     saved := th.Saved;
     err := th.Err;
   finally
@@ -421,6 +563,7 @@ begin
     begin
       eUser.Text := login;
       FToken := tok;
+      FAccount := acct;
       if not saved then
         MsgError('Signed in, but the token could not be saved to the credential store.');
       if Assigned(Log) then Log.Info('login', 'device-flow sign-in for ' + login);
@@ -446,24 +589,18 @@ begin
   if ModalResult <> mrOK then SetCode('');
 end;
 
-procedure TLoginForm.btnValidateClick(Sender: TObject);
+procedure TLoginForm.DoTokenValidate(AKind: TBackendKind;
+  const AHost, AToken: string);
 var
   th: TValidateThread;
-  login, err: string;
+  login, err, acct: string;
   okValidated, okSaved: Boolean;
 begin
-  if Trim(ePat.Text) = '' then
-  begin
-    MsgInfo('Please enter a Personal Access Token (scope: repo).');
-    Exit;
-  end;
-
-  // Validate against GitHub (blocking HTTPS) + save to the keyring on a worker
-  // thread; pump events here so the window doesn't freeze / show "not responding".
-  Screen.Cursor := crHourGlass;
-  btnValidate.Enabled := False;
-  btnCancel.Enabled := False;
-  th := TValidateThread.Create(Trim(ePat.Text));
+  // Validate against the server (blocking HTTPS) + save to the keyring on a
+  // worker thread; pump events here so the window doesn't freeze / show
+  // "not responding".
+  SetBusy(True);
+  th := TValidateThread.Create(AKind, AHost, AToken);
   try
     while not th.Finished do
     begin
@@ -474,33 +611,286 @@ begin
     okValidated := th.Validated;
     okSaved := th.Saved;
     login := th.Login;
+    acct := th.Account;
     err := th.Err;
   finally
     th.Free;
-    btnValidate.Enabled := True;
-    btnCancel.Enabled := True;
-    Screen.Cursor := crDefault;
+    SetBusy(False);
   end;
 
   if not okValidated then
   begin
-    MsgError('Could not validate token:' + LineEnding + err);
+    MsgError('Could not validate the ' + BackendLabel(AKind) + ' token:' +
+      LineEnding + err);
     Exit;
   end;
 
-  // GitHub tells us the canonical login name; trust it over the typed value.
-  eUser.Text := login;
-  FToken := Trim(ePat.Text);
+  // the server tells us the canonical login; trust it over the typed value
+  if AKind = bkGitLab then eGlUser.Text := login
+  else
+    eUser.Text := login;
+  FToken := AToken;
+  FAccount := acct;
   if not okSaved then
     MsgError('Token validated but could not be saved to the credential store.');
 
-  if Assigned(Log) then Log.Info('login', 'token validated for ' + login);
+  if Assigned(Log) then
+    Log.Info('login', BackendLabel(AKind) + ' token validated for ' + login);
   ModalResult := mrOK;
+end;
+
+function TLoginForm.ValidateActiveTab: Boolean;
+var
+  base: string;
+  hostArg, port, path: string;
+begin
+  Result := False;
+  case ActiveKind of
+    bkGitHub:
+      if Trim(ePat.Text) = '' then
+      begin
+        MsgInfo('Please enter a Personal Access Token (scope: repo).');
+        ActiveControl := ePat;
+        Exit;
+      end;
+    bkGitLab:
+    begin
+      if Trim(eGlHost.Text) = '' then
+      begin
+        MsgInfo('Please enter the GitLab server address.');
+        ActiveControl := eGlHost;
+        Exit;
+      end;
+      if Trim(eGlPat.Text) = '' then
+      begin
+        MsgInfo('Please enter a GitLab Personal Access Token (scope: api).');
+        ActiveControl := eGlPat;
+        Exit;
+      end;
+    end;
+    bkGit:
+    begin
+      base := Trim(eSshBase.Text);
+      if base = '' then
+      begin
+        MsgInfo('Please enter an ssh:// base URL or pick a folder.');
+        ActiveControl := eSshBase;
+        Exit;
+      end;
+      // saving needs no network, but a value that is neither an ssh target nor
+      // an existing folder is almost certainly a typo
+      if (not ParseSshTarget(base, hostArg, port, path)) and
+        (not DirectoryExists(base)) and (Pos('@', base) = 0) then
+        if not MsgConfirm('"' + base + '" is not an ssh URL and does not ' +
+          'exist as a folder.' + LineEnding + LineEnding + 'Save it anyway?') then
+        begin
+          ActiveControl := eSshBase;
+          Exit;
+        end;
+    end;
+    bkS3:
+    begin
+      if not FS3Ready then
+      begin
+        MsgInfo(S3_HELPER_MISSING_MSG);
+        Exit;
+      end;
+      base := LowerCase(Trim(eS3Base.Text));
+      if Copy(base, 1, 5) <> 's3://' then
+      begin
+        MsgInfo('The bucket must look like s3://my-bucket/optional-prefix.');
+        ActiveControl := eS3Base;
+        Exit;
+      end;
+    end;
+  end;
+  Result := True;
+end;
+
+procedure TLoginForm.btnValidateClick(Sender: TObject);
+begin
+  if not ValidateActiveTab then Exit;
+  case ActiveKind of
+    bkGitHub: DoTokenValidate(bkGitHub, '', Trim(ePat.Text));
+    bkGitLab: DoTokenValidate(bkGitLab, Trim(eGlHost.Text), Trim(eGlPat.Text));
+    else
+      ModalResult := mrOK;   // keyless backends have nothing to check remotely
+  end;
+end;
+
+procedure TLoginForm.btnTestClick(Sender: TObject);
+var
+  git: TGitRunner;
+  env: TStringList;
+  prov: TS3Provider;
+  url: string;
+  ok: Boolean;
+begin
+  if not ValidateActiveTab then Exit;
+  SetBusy(True);
+  env := TStringList.Create;
+  git := TGitRunner.Create('');
+  try
+    if ActiveKind = bkS3 then
+    begin
+      prov := TS3Provider.Create(Trim(eS3Base.Text), Trim(eS3Profile.Text),
+        Trim(eS3Region.Text));
+      try
+        url := prov.PushUrl(GOTBOX_REPO);
+        prov.GetRunnerEnv(env);
+      finally
+        prov.Free;
+      end;
+      git.SetExtraEnv(env);
+    end
+    else
+      url := JoinRemote(Trim(eSshBase.Text), GOTBOX_REPO + '.git');
+    // ls-remote on a repo that need not exist: we are testing reachability and
+    // credentials, and "not found" still proves we got there
+    ok := git.Git(['ls-remote', url]).Ok;
+  finally
+    git.Free;
+    env.Free;
+    SetBusy(False);
+  end;
+
+  if ok then
+    MsgInfo('Reached ' + url + ' successfully.')
+  else
+    MsgError('Could not reach ' + url + '.' + LineEnding + LineEnding +
+      'For a self-hosted server, check the address and that your ssh key ' +
+      'works. For S3, check the bucket name, your AWS profile and that the ' +
+      'bucket exists.');
 end;
 
 procedure TLoginForm.lnkTokenClick(Sender: TObject);
 begin
   OpenURL('https://github.com/settings/tokens/new?scopes=repo&description=GotBox');
+end;
+
+procedure TLoginForm.lnkGlTokenClick(Sender: TObject);
+var
+  host: string;
+begin
+  host := Trim(eGlHost.Text);
+  if host = '' then host := GITLAB_DEFAULT_HOST;
+  if Pos('://', host) = 0 then host := 'https://' + host;
+  while (host <> '') and (host[Length(host)] = '/') do
+    SetLength(host, Length(host) - 1);
+  OpenURL(host + '/-/user_settings/personal_access_tokens');
+end;
+
+procedure TLoginForm.LoadFromConfig(ACfg: TGotConfig);
+var
+  helper: string;
+begin
+  // GitHub
+  eUser.Text := ACfg.RemoteUser;
+  ePat.Text := '';
+  SetCode('');
+  mDevMsg.Lines.Text := 'Press "Sign in with GitHub" to get a one-time code. ' +
+    'GotBox copies it to the clipboard and opens the GitHub page where you ' +
+    'paste it; no token to create by hand.';
+  // device-flow sign-in only when a client id is configured; without one the
+  // tab is the plain manual-PAT form (Height 0 reclaims the space with no
+  // arithmetic of our own -- the layout engine does it)
+  rgGhMethod.Visible := OAuthAvailable;
+  rgGhMethod.ItemIndex := 0;
+  if OAuthAvailable then rgGhMethod.Height := 52
+  else
+    rgGhMethod.Height := 0;
+
+  // GitLab
+  if ACfg.GitLabHost <> '' then eGlHost.Text := ACfg.GitLabHost
+  else
+    eGlHost.Text := GITLAB_DEFAULT_HOST;
+  eGlNs.Text := ACfg.GitLabNamespace;
+  eGlPat.Text := '';
+  if ParseBackendKind(ACfg.RemoteKind) = bkGitLab then eGlUser.Text := ACfg.RemoteUser
+  else
+    eGlUser.Text := '';
+  mGlMsg.Lines.Text :=
+    'GotBox creates one private project per synced folder and pushes over ' +
+    'HTTPS with this token. The token goes into your OS keyring, never into ' +
+    'the config file or a remote URL.' + LineEnding + LineEnding +
+    'Browser sign-in (device flow) is GitHub-only for now.';
+
+  // self-hosted
+  eSshBase.Text := ACfg.SshBase;
+  mSshHelp.Lines.Text :=
+    'Examples:  ssh://git@server.example.edu/srv/git   |   ' +
+    'git@server:srv/git   |   /mnt/backup/git' + LineEnding + LineEnding +
+    'GotBox authenticates with your existing ssh keys, so there is nothing to ' +
+    'store in the keyring. A missing repository is created on the server with ' +
+    '`git init --bare`.';
+
+  // S3
+  eS3Base.Text := ACfg.S3Base;
+  eS3Profile.Text := ACfg.AwsProfile;
+  eS3Region.Text := ACfg.AwsRegion;
+  helper := S3HelperPath;
+  FS3Ready := helper <> '';
+  if FS3Ready then lblS3Helper.Caption := 'git-remote-s3: found at ' + helper
+  else
+    lblS3Helper.Caption := 'git-remote-s3: NOT FOUND on PATH. Install it to ' +
+      'use the S3 backend.';
+  eS3Base.Enabled := FS3Ready;
+  eS3Profile.Enabled := FS3Ready;
+  eS3Region.Enabled := FS3Ready;
+  mS3Help.Lines.Text :=
+    'S3 is reached through the git-remote-s3 helper (git itself has no S3 ' +
+    'transport). Install it with:  pipx install git-remote-s3' + LineEnding +
+    LineEnding +
+    'Credentials come from your AWS profile or environment -- GotBox stores ' +
+    'no AWS keys. The bucket must already exist. Note that GotBox polls S3 at ' +
+    'most once a minute, so changes from another machine can take that long ' +
+    'to appear.';
+
+  pcBackend.ActivePage := TabForKind(ParseBackendKind(ACfg.RemoteKind));
+end;
+
+procedure TLoginForm.SaveToConfig(ACfg: TGotConfig);
+var
+  s: string;
+begin
+  // Only the active tab's settings are written, but the other tabs' values are
+  // left alone in the config, so switching back and forth does not lose them.
+  case ActiveKind of
+    bkGitHub:
+    begin
+      ACfg.RemoteKind := 'github';
+      ACfg.RemoteUser := Trim(eUser.Text);
+    end;
+    bkGitLab:
+    begin
+      ACfg.RemoteKind := 'gitlab';
+      ACfg.RemoteUser := Trim(eGlUser.Text);
+      s := Trim(eGlHost.Text);
+      if (s <> '') and (Pos('://', s) = 0) then s := 'https://' + s;
+      while (s <> '') and (s[Length(s)] = '/') do
+        SetLength(s, Length(s) - 1);
+      ACfg.GitLabHost := s;
+      ACfg.GitLabNamespace := Trim(eGlNs.Text);
+    end;
+    bkGit:
+    begin
+      ACfg.RemoteKind := 'git';
+      s := Trim(eSshBase.Text);
+      while (Length(s) > 1) and (s[Length(s)] = '/') do
+        SetLength(s, Length(s) - 1);
+      ACfg.SshBase := s;
+    end;
+    bkS3:
+    begin
+      ACfg.RemoteKind := 's3';
+      s := Trim(eS3Base.Text);
+      while (Length(s) > 5) and (s[Length(s)] = '/') do
+        SetLength(s, Length(s) - 1);
+      ACfg.S3Base := s;
+      ACfg.AwsProfile := Trim(eS3Profile.Text);
+      ACfg.AwsRegion := Trim(eS3Region.Text);
+    end;
+  end;
 end;
 
 function TLoginForm.RunLogin(ACfg: TGotConfig): Boolean;
@@ -511,29 +901,14 @@ begin
     Exit;
   end;
   FToken := '';
+  FAccount := '';
   FDevCancelled := False;
   FCloseAfterCancel := False;
-  eUser.Text := ACfg.GithubUser;
-  ePat.Text := '';
-  SetCode('');
-  mDevMsg.Lines.Text := 'Press "Sign in with GitHub" to get a one-time code. ' +
-    'GotBox copies it to the clipboard and opens the GitHub page where you ' +
-    'paste it; no token to create by hand.';
-  // device-flow sign-in only when a client id is configured; otherwise the form
-  // is the plain manual-PAT dialog
-  rgMethod.Visible := OAuthAvailable;
-  if OAuthAvailable then
-  begin
-    rgMethod.ItemIndex := 0;
-    pnlPat.Top := pnlDevice.Top;
-  end
-  else
-    pnlPat.Top := rgMethod.Top;   // reclaim the hidden selector's space
-  ApplyMethod;
+  LoadFromConfig(ACfg);
+  ApplyGhMethod;   // also calls ApplyTab
   CenterForm(Self);
   Result := ShowModal = mrOK;
-  if Result then
-    ACfg.GithubUser := Trim(eUser.Text);
+  if Result then SaveToConfig(ACfg);
 end;
 
 end.

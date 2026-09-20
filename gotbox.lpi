@@ -57,7 +57,7 @@
         <PackageName Value="LCL"/>
       </Item1>
     </RequiredPackages>
-    <Units Count="27">
+    <Units Count="29">
       <Unit0>
         <Filename Value="gotbox.lpr"/>
         <IsPartOfProject Value="True"/>
@@ -207,6 +207,16 @@
         <IsPartOfProject Value="True"/>
         <UnitName Value="gboxoverlayipc"/>
       </Unit25>
+      <Unit27>
+        <Filename Value="src/core/gboxbackend.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxbackend"/>
+      </Unit27>
+      <Unit28>
+        <Filename Value="src/core/gboxgitlabapi.pas"/>
+        <IsPartOfProject Value="True"/>
+        <UnitName Value="gboxgitlabapi"/>
+      </Unit28>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

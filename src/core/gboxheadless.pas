@@ -40,7 +40,8 @@ uses
   Classes, SysUtils,
   {$IFDEF UNIX}BaseUnix, ctypes,{$ENDIF}
   gboxdaemon, gboxlog, gboxconfigstore, gboxcredstore, gboxstatusmodel,
-  gboxsuper, gboxengine, gboxrootlock, gboxfilestatus, gboxoverlayipc;
+  gboxsuper, gboxengine, gboxremote, gboxrootlock, gboxfilestatus,
+  gboxoverlayipc;
 
 var
   GQuit: Boolean = False;
@@ -52,42 +53,18 @@ begin
 end;
 {$ENDIF}
 
-{ Resolve the remote credentials the way the GUI's PrepareRemote does. Returns
-  False with AErr set when the app isn't configured enough to sync. }
+{ Resolve the remote credentials the way the GUI's PrepareRemote does -- both
+  defer to gboxremote.ResolveRemoteAuth, so a new backend is taught in exactly
+  one place. Returns False with AErr set when the app isn't configured enough
+  to sync. }
 function ResolveRemote(ACfg: TGotConfig; out AToken, AErr: string): Boolean;
-var
-  cred: TCredStore;
 begin
-  AToken := '';
-  AErr := '';
-  Result := False;
-  if SameText(ACfg.RemoteKind, 'git') then
-  begin
-    if ACfg.SshBase = '' then
-    begin
-      AErr := 'self-hosted git base URL not set';
-      Exit;
-    end;
-    Exit(True);   // ssh key auth -- no token needed
-  end;
-  // github backend
-  if ACfg.GithubUser = '' then
-  begin
-    AErr := 'no GitHub account configured';
-    Exit;
-  end;
-  cred := TCredStore.Create;
-  try
-    if not cred.LoadToken(ACfg.GithubUser, AToken) then
-    begin
-      AErr := 'no stored token found (sign in once via the GUI, ' +
-        'or ensure the login keyring is unlocked)';
-      Exit;
-    end;
-  finally
-    cred.Free;
-  end;
-  Result := True;
+  Result := ResolveRemoteAuth(ACfg, AToken, AErr);
+  // the shared wording points at the GUI's Account window, which a headless
+  // box may not have
+  if (not Result) and (AErr <> '') then
+    AErr := AErr + ' (configure it in the GUI, or ensure the login keyring ' +
+      'is unlocked)';
 end;
 
 function RunHeadless: Integer;

@@ -158,6 +158,8 @@ var
   hasHead: Boolean;
 begin
   Result := 0;
+  // a backend with no per-file limit (self-hosted git, S3) unstages nothing
+  if AHardLimitBytes <= 0 then Exit;
   r := AGit.GitQuiet(['-c', 'core.quotePath=false', 'diff', '--cached',
     '--name-only']);
   if not r.Ok then Exit;
@@ -282,6 +284,12 @@ var
   i: Integer;
   rel, full: string;
 begin
+  // a backend with no per-file limit (self-hosted git, S3) has nothing to scan
+  if AHardLimitBytes <= 0 then
+  begin
+    AOut.Clear;
+    Exit(0);
+  end;
   Result := 0;
   if AOut = nil then Exit;
   AOut.Clear;

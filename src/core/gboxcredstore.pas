@@ -42,21 +42,29 @@ unit gboxcredstore;
 
 interface
 
+uses
+  Classes;
+
 type
   TCredStore = class
   private
     function FallbackFile: string;
+    procedure LoadFallbackLines(AOut: TStringList);
+    procedure DropFallbackLine(ALines: TStringList; const AUser: string);
     function SaveFallback(const AUser, AToken: string): Boolean;
     function LoadFallback(const AUser: string; out AToken: string): Boolean;
-    function DeleteFallback: Boolean;
+    function DeleteFallback(const AUser: string): Boolean;
   public
   const
     ServiceName = 'gotbox';
-    { Stores AToken for AUser. Returns True on success. }
+    { Stores AToken for account AUser. Returns True on success. AUser is the
+      key from gboxbackend.CredKey -- a bare login for GitHub (unchanged since
+      the first release) and a host-scoped key for the newer backends -- so
+      several backends' tokens can coexist. }
     function SaveToken(const AUser, AToken: string): Boolean;
-    { Loads the token for AUser. Returns False if none stored. }
+    { Loads the token for account AUser. Returns False if none stored. }
     function LoadToken(const AUser: string; out AToken: string): Boolean;
-    { Removes any stored token for AUser. }
+    { Removes any stored token for account AUser. }
     function DeleteToken(const AUser: string): Boolean;
     { True if a native OS secret store CLI is present. }
     function HasNativeStore: Boolean;
@@ -67,7 +75,7 @@ implementation
 uses
   {$IFDEF UNIX}BaseUnix,{$ENDIF}
   {$IFDEF DARWIN}StrUtils,{$ENDIF}
-  Classes, SysUtils, Process, base64, sha1, gboxconfigstore, gboxlog, gboxatomic;
+  SysUtils, Process, base64, sha1, gboxconfigstore, gboxlog, gboxatomic;
 
 type
   TStringArray = array of string;   // secret-tool env override list
@@ -298,7 +306,7 @@ begin
   if (not CredFallbackForced) and (WhichExe('security') <> '') then
     RunCapture('security', ['delete-generic-password', '-a', AUser, '-s', ServiceName], '', outp);
   {$ENDIF}
-  Result := DeleteFallback;
+  Result := DeleteFallback(AUser);
 end;
 
 { ---- file fallback (DPAPI on Windows; machine-bound keystream elsewhere) ---- }
@@ -499,6 +507,33 @@ begin
     Result := XorObfuscate(AData);   // legacy 'xor'
 end;
 
+{ Reads the fallback file into AOut (empty when there is none). }
+procedure TCredStore.LoadFallbackLines(AOut: TStringList);
+begin
+  AOut.Clear;
+  if FileExists(FallbackFile) then
+    try
+      AOut.LoadFromFile(FallbackFile);
+    except
+      on E: Exception do
+        if Assigned(Log) then
+          Log.Error('cred', 'fallback read failed: ' + E.Message);
+    end;
+end;
+
+{ Removes the line whose account field is AUser, if present. }
+procedure TCredStore.DropFallbackLine(ALines: TStringList; const AUser: string);
+var
+  i, p: Integer;
+begin
+  for i := ALines.Count - 1 downto 0 do
+  begin
+    p := Pos(#9, ALines[i]);
+    if p <= 0 then Continue;
+    if SameText(Copy(ALines[i], 1, p - 1), AUser) then ALines.Delete(i);
+  end;
+end;
+
 function TCredStore.SaveFallback(const AUser, AToken: string): Boolean;
 var
   f: TStringList;
@@ -510,7 +545,12 @@ begin
     blob := ProtectToken(AToken, MachineSecret + '|' + AUser, scheme);
     f := TStringList.Create;
     try
-      // user<TAB>scheme<TAB>base64(protected(token))
+      // keep every other account's line: with more than one backend the file
+      // legitimately holds several entries, and rewriting it with just ours
+      // would silently evict them
+      LoadFallbackLines(f);
+      DropFallbackLine(f, AUser);
+      // account<TAB>scheme<TAB>base64(protected(token))
       f.Add(AUser + #9 + scheme + #9 + EncodeStringBase64(blob));
       path := FallbackFile;
       // AOwnerOnly tightens the temp file before the rename, so the token is
@@ -568,7 +608,10 @@ begin
         enc := line;
         legacy := True;
       end;
-      seed := MachineSecret + '|' + AUser;
+      // seed from the line's own account field, not the lookup argument: the
+      // match above is case-insensitive, and the blob was sealed with whatever
+      // spelling is on disk
+      seed := MachineSecret + '|' + u;
       AToken := UnprotectToken(DecodeStringBase64(enc), seed, scheme);
       Result := AToken <> '';
       // transparently upgrade a legacy weak-XOR file to the machine-bound scheme
@@ -580,11 +623,23 @@ begin
   end;
 end;
 
-function TCredStore.DeleteFallback: Boolean;
+function TCredStore.DeleteFallback(const AUser: string): Boolean;
+var
+  f: TStringList;
 begin
   Result := True;
-  if FileExists(FallbackFile) then
-    Result := DeleteFile(FallbackFile);
+  if not FileExists(FallbackFile) then Exit;
+  f := TStringList.Create;
+  try
+    LoadFallbackLines(f);
+    DropFallbackLine(f, AUser);
+    // drop the file once the last account goes, so an empty file never lingers
+    if f.Count = 0 then Result := DeleteFile(FallbackFile)
+    else
+      Result := AtomicSaveLines(f, FallbackFile, True);
+  finally
+    f.Free;
+  end;
 end;
 
 end.

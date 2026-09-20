@@ -29,9 +29,13 @@ uses
 
 const
   GOTBOX_VERSION = '0.5.0';
+  { Bumped when config.json grows keys an older build would misread. 2 renamed
+    githubUser -> remoteUser when the second and third backends landed. }
+  CONFIG_SCHEMA_VERSION = 2;
+  GITLAB_DEFAULT_HOST = 'https://gitlab.com';
 
 type
-  { Cached state for one mapped repo (root subfolder <-> GitHub repo). }
+  { Cached state for one mapped repo (root subfolder <-> remote repo). }
   TRepoEntry = record
     LocalName: string;   // subfolder name under RootDir (also the repo name)
     RemoteUrl: string;   // https remote (without embedded credentials)
@@ -45,9 +49,15 @@ type
   TGotConfig = class
   public
     RootDir: string;
-    RemoteKind: string;         // 'github' (HTTPS+PAT) or 'git' (ssh:// / path)
-    GithubUser: string;
+    SchemaVersion: Integer;     // 1 = pre-multi-backend (githubUser); 2 = current
+    RemoteKind: string;         // 'github' | 'gitlab' | 'git' (ssh:// / path) | 's3'
+    RemoteUser: string;         // login for the hosted kinds (was githubUser)
     SshBase: string;            // base for 'git' kind, e.g. ssh://git@host/srv/git
+    GitLabHost: string;         // 'https://gitlab.com' or a self-managed instance
+    GitLabNamespace: string;    // group path; blank = the user's own namespace
+    S3Base: string;             // base for 's3' kind, e.g. s3://bucket/prefix
+    AwsProfile: string;         // blank = boto3's default credential chain
+    AwsRegion: string;          // blank = the profile/environment default
     MachineName: string;
     HistoryCap: Integer;        // 20..50
     CommitDebounceMs: Integer;  // coalesce save bursts
@@ -192,9 +202,15 @@ end;
 procedure TGotConfig.SetDefaults;
 begin
   RootDir := DefaultRootDir;
+  SchemaVersion := CONFIG_SCHEMA_VERSION;
   RemoteKind := 'github';
-  GithubUser := '';
+  RemoteUser := '';
   SshBase := '';
+  GitLabHost := GITLAB_DEFAULT_HOST;
+  GitLabNamespace := '';
+  S3Base := '';
+  AwsProfile := '';
+  AwsRegion := '';
   MachineName := GetEnvironmentVariable(
     {$IFDEF WINDOWS}
 'COMPUTERNAME'
@@ -272,9 +288,18 @@ begin
       if not (root is TJSONObject) then Exit;
       obj := TJSONObject(root);
       Result.RootDir := obj.Get('rootDir', Result.RootDir);
+      Result.SchemaVersion := obj.Get('schemaVersion', 1);
       Result.RemoteKind := obj.Get('remoteKind', Result.RemoteKind);
-      Result.GithubUser := obj.Get('githubUser', Result.GithubUser);
+      // schema 1 called this githubUser; read it so an existing install keeps
+      // its account (Save writes both keys for one release)
+      Result.RemoteUser := obj.Get('remoteUser',
+        obj.Get('githubUser', Result.RemoteUser));
       Result.SshBase := obj.Get('sshBase', Result.SshBase);
+      Result.GitLabHost := obj.Get('gitlabHost', Result.GitLabHost);
+      Result.GitLabNamespace := obj.Get('gitlabNamespace', Result.GitLabNamespace);
+      Result.S3Base := obj.Get('s3Base', Result.S3Base);
+      Result.AwsProfile := obj.Get('awsProfile', Result.AwsProfile);
+      Result.AwsRegion := obj.Get('awsRegion', Result.AwsRegion);
       Result.MachineName := obj.Get('machineName', Result.MachineName);
       Result.HistoryCap := obj.Get('historyCap', Result.HistoryCap);
       Result.CommitDebounceMs := obj.Get('commitDebounceMs', Result.CommitDebounceMs);
@@ -335,9 +360,18 @@ begin
   obj := TJSONObject.Create;
   try
     obj.Add('rootDir', ACfg.RootDir);
+    obj.Add('schemaVersion', CONFIG_SCHEMA_VERSION);
     obj.Add('remoteKind', ACfg.RemoteKind);
-    obj.Add('githubUser', ACfg.GithubUser);
+    obj.Add('remoteUser', ACfg.RemoteUser);
+    // legacy mirror so a downgrade (or an older gotboxd) still finds the
+    // account; drop after 0.6
+    obj.Add('githubUser', ACfg.RemoteUser);
     obj.Add('sshBase', ACfg.SshBase);
+    obj.Add('gitlabHost', ACfg.GitLabHost);
+    obj.Add('gitlabNamespace', ACfg.GitLabNamespace);
+    obj.Add('s3Base', ACfg.S3Base);
+    obj.Add('awsProfile', ACfg.AwsProfile);
+    obj.Add('awsRegion', ACfg.AwsRegion);
     obj.Add('machineName', ACfg.MachineName);
     obj.Add('historyCap', ACfg.HistoryCap);
     obj.Add('commitDebounceMs', ACfg.CommitDebounceMs);

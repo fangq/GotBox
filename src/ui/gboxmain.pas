@@ -31,7 +31,7 @@ uses
   gboxconfigstore, gboxstatusmodel, gboxlog,
   gboxcredstore, gboxengine, gboxsuper, gboxfilewatcher, gboxrootlock, gboxmsg,
   gboxfilestatus, gboxoverlayipc, gboxdaemon, gboxgitrunner, gboxhistory,
-  gboxappind;
+  gboxremote, gboxbackend, gboxappind;
 
 type
   TMainForm = class(TForm)
@@ -123,6 +123,8 @@ type
     procedure mnuStatus(Sender: TObject);
     procedure mnuSettings(Sender: TObject);
     procedure mnuAccount(Sender: TObject);
+    procedure mnuAccountFromSettings(Sender: TObject);
+    function DoAccount(ABootstrap: Boolean): Boolean;
     procedure mnuExportLog(Sender: TObject);
     procedure mnuEnableOverlays(Sender: TObject);
     procedure mnuFinderOverlays(Sender: TObject);
@@ -368,7 +370,7 @@ begin
     AppIndAddSeparator;
     AppIndAddItem('Status...', 3);
     AppIndAddItem('Settings...', 4);
-    AppIndAddItem('Account...', 5);
+    AppIndAddItem('Account && storage...', 5);
     AppIndAddItem('Export log...', 6);
     AppIndAddSeparator;
     AppIndAddItem('About', 7);
@@ -496,7 +498,7 @@ begin
   AddSep;
   AddItem('Status...', @mnuStatus);
   AddItem('Settings...', @mnuSettings);
-  AddItem('Account...', @mnuAccount);
+  AddItem('Account && storage...', @mnuAccount);
   AddItem('Export log...', @mnuExportLog);
   {$IFDEF WINDOWS}
   // Explorer status badges are a Windows shell extension; registering it needs
@@ -707,10 +709,9 @@ begin
 end;
 
 { Validates that the configured remote backend is usable and returns the auth
-  token (empty for the ssh/self-hosted backend, which uses ssh keys). }
+  token (empty for the keyless backends). The per-backend rules live in
+  gboxremote.ResolveRemoteAuth, shared with the headless daemon. }
 function TMainForm.PrepareRemote(out AToken, AErr: string): Boolean;
-var
-  cred: TCredStore;
 begin
   AToken := '';
   AErr := '';
@@ -720,35 +721,7 @@ begin
     AErr := 'Set a valid root folder in Settings first.';
     Exit;
   end;
-
-  if SameText(FConfig.RemoteKind, 'git') then
-  begin
-    if FConfig.SshBase = '' then
-    begin
-      AErr := 'Set the self-hosted git base URL in Settings first.';
-      Exit;
-    end;
-    Result := True;   // ssh key auth; no token needed
-    Exit;
-  end;
-
-  // github backend
-  if FConfig.GithubUser = '' then
-  begin
-    AErr := 'Sign in with the Account window first.';
-    Exit;
-  end;
-  cred := TCredStore.Create;
-  try
-    if not cred.LoadToken(FConfig.GithubUser, AToken) then
-    begin
-      AErr := 'No stored token found. Use Account to sign in again.';
-      Exit;
-    end;
-  finally
-    cred.Free;
-  end;
-  Result := True;
+  Result := ResolveRemoteAuth(FConfig, AToken, AErr);
 end;
 
 { Run AMethod on the GUI thread: directly if we are already there, else marshal
@@ -926,22 +899,40 @@ end;
   closes (and over x2go the modal is often not even visible/focused, leaving the
   user staring at an empty menu). Instead we leave the tray fully usable and
   surface "sign in via Account..." in the status line + a notification; the user
-  opens the Account window themselves, which then bootstraps the engine. The ssh
-  backend uses keys, so there is nothing to ask. }
+  opens the Account window themselves, which then bootstraps the engine. The
+  ssh and S3 backends use keys / the AWS chain, so there is no token to ask
+  for -- but a missing S3 helper is surfaced the same way. }
 procedure TMainForm.MaybePromptLogin;
 var
   cred: TCredStore;
   tok: string;
+  kind: TBackendKind;
   haveCreds: Boolean;
 begin
-  if SameText(FConfig.RemoteKind, 'git') then Exit;   // ssh keys; nothing to collect
+  kind := ParseBackendKind(FConfig.RemoteKind);
+
+  // the S3 helper is a separate install, so a missing one is worth saying out
+  // loud -- sync would otherwise fail with git's cryptic "unable to find
+  // remote helper for 's3'"
+  if kind = bkS3 then
+  begin
+    if S3HelperPath <> '' then Exit;
+    if Assigned(Log) then Log.Warn('ui', 'git-remote-s3 is not installed');
+    if Assigned(FStatusItem) then
+      FStatusItem.Caption := 'git-remote-s3 not found - install it, or change ' +
+        'the backend in Account...';
+    TrayIcon.Hint := 'GotBox - S3 helper missing';
+    Notify('GotBox - S3 helper missing', S3_HELPER_MISSING_MSG);
+    Exit;
+  end;
+  if not BackendNeedsToken(kind) then Exit;   // ssh keys; nothing to collect
 
   haveCreds := False;
-  if FConfig.GithubUser <> '' then
+  if FConfig.RemoteUser <> '' then
   begin
     cred := TCredStore.Create;
     try
-      haveCreds := cred.LoadToken(FConfig.GithubUser, tok);
+      haveCreds := cred.LoadToken(CredAccount(FConfig), tok);
     finally
       cred.Free;
     end;
@@ -949,12 +940,14 @@ begin
   if haveCreds then Exit;
 
   if Assigned(Log) then Log.Info('ui',
-      'no GitHub credentials yet; awaiting Account sign-in');
+      'no ' + BackendLabel(kind) + ' credentials yet; awaiting Account sign-in');
   if Assigned(FStatusItem) then
-    FStatusItem.Caption := 'Not signed in - open Account... to connect GitHub';
+    FStatusItem.Caption := 'Not signed in - open Account... to connect ' +
+      BackendLabel(kind);
   TrayIcon.Hint := 'GotBox - not signed in';
   Notify('GotBox - sign in',
-    'Open the tray menu and choose "Account..." to connect your GitHub account.');
+    'Open the tray menu and choose "Account..." to connect your ' +
+    BackendLabel(kind) + ' account.');
 end;
 
 { Event-driven bootstrap: if the backend is configured and the .gotbox root
@@ -1186,6 +1179,9 @@ begin
   // global actions -- reuse the tray-menu handlers so the Status window is a
   // full control centre when the tray menu can't pop (x2go/NX)
   StatusForm.OnAccount := @mnuAccount;
+  // Settings only shows a summary of the backend; its "Change..." button opens
+  // this same window, but must not bootstrap while Settings holds unsaved edits
+  ConfigForm.OnAccount := @mnuAccountFromSettings;
   StatusForm.OnSettings := @mnuSettings;
   StatusForm.OnLinkSub := @mnuLinkSub;
   StatusForm.OnSyncAll := @mnuSyncNow;
@@ -1333,7 +1329,7 @@ begin
   Screen.Cursor := crHourGlass;
   git := TGitRunner.Create(RepoDir(ARepo));
   try
-    git.AuthUser := FConfig.GithubUser;
+    git.AuthUser := RemoteAuthUser(FConfig);
     git.AuthToken := token;
     if not AddTag(git, ALabel, AMessage, detail) then
       MsgError('Add tag failed:' + LineEnding + detail);
@@ -1366,7 +1362,7 @@ begin
   try
     git := TGitRunner.Create(RepoDir(ARepo));
     try
-      git.AuthUser := FConfig.GithubUser;
+      git.AuthUser := RemoteAuthUser(FConfig);
       git.AuthToken := token;
       if not SquashBetweenTags(git, detail) then
         MsgError('Squash failed:' + LineEnding + detail)
@@ -1393,19 +1389,48 @@ begin
   end;
 end;
 
+{ Opens the Account & storage window. ABootstrap is False when Settings opened
+  it (Settings bootstraps itself once its own OK is applied, and doing it here
+  would run against a config the user is still editing). }
+function TMainForm.DoAccount(ABootstrap: Boolean): Boolean;
+var
+  before, after: string;
+begin
+  before := BackendSummary(FConfig);
+  Result := LoginForm.RunLogin(FConfig);
+  if not Result then Exit;
+  after := BackendSummary(FConfig);
+
+  // Switching backends does not move the repos that are already linked: the
+  // root keeps its old 'origin', so syncing would quietly carry on against the
+  // previous remote. Say so rather than letting it look like it worked.
+  if (after <> before) and IsGitWorkTree(FConfig.RootDir) then
+    MsgInfo('The backend is now:' + LineEnding + '  ' + after + LineEnding +
+      LineEnding + 'Folders already linked to the previous backend keep ' +
+      'pointing at it -- GotBox does not move existing repositories. To move ' +
+      'them, re-link them against the new backend.');
+
+  FStore.Save(FConfig);
+  Log.Info('ui', 'Account updated: ' + after);
+  // the engine is pointed at the old remote; let it be rebuilt
+  if (after <> before) and Assigned(FEngine) and FEngine.Running then StopEngine;
+  // clear the "Not signed in" hint set by MaybePromptLogin; the engine's first
+  // status change will overwrite it, but reset here in case it settles unchanged
+  if Assigned(FStatusItem) then FStatusItem.Caption := 'Status: starting...';
+  TrayIcon.Hint := 'GotBox';
+  // backend just became ready: content already in the root can now bootstrap
+  if ABootstrap then TryBootstrap;
+end;
+
 procedure TMainForm.mnuAccount(Sender: TObject);
 begin
-  if LoginForm.RunLogin(FConfig) then
-  begin
-    FStore.Save(FConfig);
-    Log.Info('ui', 'Account updated for user ' + FConfig.GithubUser);
-    // clear the "Not signed in" hint set by MaybePromptLogin; the engine's first
-    // status change will overwrite it, but reset here in case it settles unchanged
-    if Assigned(FStatusItem) then FStatusItem.Caption := 'Status: starting...';
-    TrayIcon.Hint := 'GotBox';
-    // backend just became ready: content already in the root can now bootstrap
-    TryBootstrap;
-  end;
+  DoAccount(True);
+end;
+
+{ Reached from the Settings window's "Change..." button. }
+procedure TMainForm.mnuAccountFromSettings(Sender: TObject);
+begin
+  DoAccount(False);
 end;
 
 procedure TMainForm.mnuExportLog(Sender: TObject);

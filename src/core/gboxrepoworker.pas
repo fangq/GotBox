@@ -30,7 +30,7 @@ interface
 uses
   Classes, SysUtils, DateUtils, SyncObjs,
   gboxgitrunner, gboxfilewatcher, gboxstatusmodel, gboxsync, gboxhistory, gboxlfs,
-  gboxrecover, gboxexclude;
+  gboxrecover, gboxbackend, gboxexclude;
 
 type
   { Fired (on the worker thread) after a cycle that synced files, with a ready-
@@ -65,6 +65,9 @@ type
     FPullIntervalMs: Integer;
     FHistoryCap: Integer;
     FLfsThresholdMB: Integer;
+    FKind: TBackendKind;        // which storage backend this repo lives on
+    FHardLimit: Int64;          // per-file push limit; 0 = the backend has none
+    FRemoteEnv: TStringList;    // extra env a transport helper needs (S3)
     FLfsChecked: Boolean;       // have we probed git-lfs availability yet?
     FLfsOk: Boolean;            // is git-lfs available?
     FAutoSync: Boolean;         // True = auto add/commit/trim; False = managed
@@ -108,6 +111,11 @@ type
       AAutoSync: Boolean; AStatus: TStatusModel; AIgnore: TStrings);
     { Set the configured ignore globs (see FConfigIgnore). }
     procedure SetConfigIgnore(AGlobs: TStrings);
+    { Which backend this repo is pushed to, and what that implies: the per-file
+      push limit (0 = none, which skips the oversize scan), whether Git LFS can
+      work at all, the minimum poll interval, and any environment a transport
+      helper needs. Set right after Create; the default is GitHub. }
+    procedure SetBackend(AKind: TBackendKind; AEnv: TStrings);
     destructor Destroy; override;
     { Request an immediate sync (e.g. the user chose "Sync now"). }
     procedure RequestSync;
@@ -184,6 +192,9 @@ begin
   FPullIntervalMs := APullIntervalSec * 1000;
   FHistoryCap := AHistoryCap;
   FLfsThresholdMB := ALfsThresholdMB;
+  FKind := bkGitHub;                       // SetBackend overrides; this is the
+  FHardLimit := PushFileLimitBytes(bkGitHub);   // long-standing default
+  FRemoteEnv := TStringList.Create;
   FBranch := 'main';   // resolved from the actual checkout on the first cycle
   FStatus := AStatus;
   FLock := TCriticalSection.Create;
@@ -203,8 +214,32 @@ begin
   FConfigIgnore.Free;
   FIgnore.Free;
   FOversize.Free;
+  FRemoteEnv.Free;
   FLock.Free;
   inherited Destroy;
+end;
+
+procedure TRepoWorker.SetBackend(AKind: TBackendKind; AEnv: TStrings);
+var
+  minMs: Integer;
+begin
+  FKind := AKind;
+  FHardLimit := PushFileLimitBytes(AKind);
+  // S3 has no LFS endpoint: tracking there would commit a pointer whose bytes
+  // can never be uploaded, so the file would arrive empty everywhere else
+  FLfsThresholdMB := EffectiveLfsThresholdMB(AKind, FLfsThresholdMB);
+  FRemoteEnv.Clear;
+  if Assigned(AEnv) then FRemoteEnv.Assign(AEnv);
+  // going through a remote helper costs an interpreter start per probe, so a
+  // 15 s poll would spawn a process every few seconds forever
+  minMs := MinPollIntervalSec(AKind) * 1000;
+  if FPullIntervalMs < minMs then
+  begin
+    FPullIntervalMs := minMs;
+    if Assigned(Log) then
+      Log.Info('worker', FName + ': poll interval raised to ' +
+        IntToStr(minMs div 1000) + 's for the ' + BackendLabel(AKind) + ' backend');
+  end;
 end;
 
 procedure TRepoWorker.SetConfigIgnore(AGlobs: TStrings);
@@ -257,6 +292,7 @@ begin
   try
     git.AuthUser := FUser;
     git.AuthToken := FToken;
+    git.SetExtraEnv(FRemoteEnv);
     git.DefaultTimeoutMs := GIT_DEFAULT_TIMEOUT_MS;
     r := git.GitQuiet(['ls-remote', 'origin', 'refs/heads/' + FBranch]);
     if not r.Ok then Exit(True);               // can't tell -> full cycle
@@ -308,6 +344,7 @@ begin
   try
     git.AuthUser := FUser;
     git.AuthToken := FToken;
+    git.SetExtraEnv(FRemoteEnv);
     // bound every git op so a stuck one (e.g. a Windows file-lock deadlock on a
     // shared repo) can't hang this worker thread -- and thus engine.Stop's join
     // -- indefinitely; it fails the cycle instead and retries next time.
@@ -367,15 +404,16 @@ begin
       // a clear error below. The scan rebuilds the set every cycle -- including
       // files it excluded on an earlier cycle or in an earlier run -- so the
       // block neither self-erases nor keeps stale entries.
-      if not lfsAbsorbs then
+      if (not lfsAbsorbs) and (FHardLimit > 0) then
       begin
-        FindOversizeUnhandled(git, GITHUB_FILE_LIMIT, FOversize);
+        FindOversizeUnhandled(git, FHardLimit, FOversize);
         WriteExcludeBlock(git, FOversize);
         // nothing blocked any more: re-arm the notice for the next offender
         if FOversize.Count = 0 then FOversizeNotified := False;
       end;
 
-      outcome := RunSyncCycle(git, FMachine, detail, conflicts, changed, FBranch);
+      outcome := RunSyncCycle(git, FMachine, detail, conflicts, changed, FBranch,
+        FKind, FHardLimit);
     end
     else
       // managed: transport committed state only -- never set the user's git

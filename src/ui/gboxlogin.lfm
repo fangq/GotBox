@@ -1,191 +1,493 @@
 object LoginForm: TLoginForm
   Left = 0
-  Height = 440
+  Height = 480
   Top = 0
-  Width = 460
+  Width = 520
   BorderStyle = bsDialog
-  Caption = 'GotBox - GitHub account'
-  ClientHeight = 440
-  ClientWidth = 460
+  Caption = 'GotBox - Account & storage'
+  ClientHeight = 480
+  ClientWidth = 520
   OnCloseQuery = FormCloseQuery
   Position = poScreenCenter
   LCLVersion = '4.2.0.0'
-  object rgMethod: TRadioGroup
-    Left = 16
+  object pnlButtons: TPanel
+    Left = 0
     Height = 52
-    Top = 10
-    Width = 428
-    AutoFill = True
-    Caption = 'Sign in method'
-    ChildSizing.LeftRightSpacing = 6
-    ChildSizing.EnlargeHorizontal = crsHomogenousChildResize
-    ChildSizing.EnlargeVertical = crsHomogenousChildResize
-    ChildSizing.ShrinkHorizontal = crsScaleChilds
-    ChildSizing.ShrinkVertical = crsScaleChilds
-    ChildSizing.Layout = cclLeftToRightThenTopToBottom
-    ChildSizing.ControlsPerLine = 2
-    ClientHeight = 32
-    ClientWidth = 424
-    Columns = 2
-    ItemIndex = 0
-    Items.Strings = (
-      'Sign in with GitHub'
-      'Personal Access Token'
-    )
-    OnClick = rgMethodClick
-    TabOrder = 0
-  end
-  object pnlDevice: TPanel
-    Left = 16
-    Height = 316
-    Top = 70
-    Width = 428
+    Top = 428
+    Width = 520
+    Align = alBottom
     BevelOuter = bvNone
-    ClientHeight = 316
-    ClientWidth = 428
+    ClientHeight = 52
+    ClientWidth = 520
     TabOrder = 1
-    object btnDevice: TButton
-      Left = 0
-      Height = 34
-      Top = 2
-      Width = 428
-      Caption = 'Sign in with GitHub'
-      OnClick = btnDeviceClick
+    object btnTest: TButton
+      Left = 224
+      Height = 32
+      Top = 8
+      Width = 130
+      Anchors = [akTop, akRight]
+      Caption = 'Test connection'
+      OnClick = btnTestClick
       TabOrder = 0
     end
-    object lblCode: TLabel
-      Left = 0
-      Height = 16
-      Top = 46
-      Width = 428
-      AutoSize = False
-      Caption = 'One-time code (copy this into the GitHub page):'
-    end
-    object eCode: TEdit
-      Left = 0
-      Height = 44
-      Top = 66
-      Width = 340
-      Alignment = taCenter
-      Font.Height = -24
-      Enabled = False
-      Font.Style = [fsBold]
-      ParentFont = False
-      ReadOnly = True
+    object btnValidate: TButton
+      Left = 362
+      Height = 32
+      Top = 8
+      Width = 74
+      Anchors = [akTop, akRight]
+      Caption = 'Save'
+      Default = True
+      OnClick = btnValidateClick
       TabOrder = 1
     end
-    object btnCopyCode: TButton
-      Left = 350
-      Height = 44
-      Top = 66
-      Width = 78
-      Caption = 'Copy'
-      Enabled = False
-      OnClick = btnCopyCodeClick
+    object btnCancel: TButton
+      Left = 444
+      Height = 32
+      Top = 8
+      Width = 68
+      Anchors = [akTop, akRight]
+      Cancel = True
+      Caption = 'Cancel'
+      ModalResult = 2
       TabOrder = 2
     end
-    object mDevMsg: TMemo
-      Left = 0
-      Height = 160
-      Top = 120
-      Width = 428
-      BorderStyle = bsNone
-      ParentColor = True
-      ReadOnly = True
-      ScrollBars = ssAutoVertical
-      TabOrder = 3
-      WordWrap = True
-    end
-    object btnDevCancel: TButton
-      Left = 290
-      Height = 30
-      Top = 284
-      Width = 138
-      Caption = 'Cancel sign-in'
-      Enabled = False
-      OnClick = btnDevCancelClick
-      TabOrder = 4
-    end
   end
-  object pnlPat: TPanel
-    Left = 16
-    Height = 316
-    Top = 70
-    Width = 428
-    BevelOuter = bvNone
-    ClientHeight = 316
-    ClientWidth = 428
-    TabOrder = 2
-    Visible = False
-    object lblUser: TLabel
-      Left = 0
-      Height = 16
-      Top = 4
-      Width = 110
-      Caption = 'GitHub username'
+  object pcBackend: TPageControl
+    Left = 12
+    Height = 416
+    Top = 12
+    Width = 496
+    ActivePage = tsGitHub
+    Align = alClient
+    BorderSpacing.Left = 12
+    BorderSpacing.Top = 12
+    BorderSpacing.Right = 12
+    TabIndex = 0
+    TabOrder = 0
+    OnChange = pcBackendChange
+    OnChanging = pcBackendChanging
+    object tsGitHub: TTabSheet
+      Caption = 'GitHub'
+      ClientHeight = 388
+      ClientWidth = 488
+      object rgGhMethod: TRadioGroup
+        Left = 0
+        Height = 52
+        Top = 0
+        Width = 488
+        Align = alTop
+        AutoFill = True
+        Caption = 'Sign in method'
+        ChildSizing.LeftRightSpacing = 6
+        ChildSizing.EnlargeHorizontal = crsHomogenousChildResize
+        ChildSizing.EnlargeVertical = crsHomogenousChildResize
+        ChildSizing.ShrinkHorizontal = crsScaleChilds
+        ChildSizing.ShrinkVertical = crsScaleChilds
+        ChildSizing.Layout = cclLeftToRightThenTopToBottom
+        ChildSizing.ControlsPerLine = 2
+        ClientHeight = 32
+        ClientWidth = 484
+        Columns = 2
+        ItemIndex = 0
+        Items.Strings = (
+          'Sign in with GitHub'
+          'Personal Access Token'
+        )
+        OnClick = rgGhMethodClick
+        TabOrder = 0
+      end
+      object pnlDevice: TPanel
+        Left = 0
+        Height = 336
+        Top = 52
+        Width = 488
+        Align = alClient
+        BevelOuter = bvNone
+        ClientHeight = 336
+        ClientWidth = 488
+        TabOrder = 1
+        object pnlDevTop: TPanel
+          Left = 0
+          Height = 124
+          Top = 0
+          Width = 488
+          Align = alTop
+          BevelOuter = bvNone
+          ClientHeight = 124
+          ClientWidth = 488
+          TabOrder = 0
+          object btnDevice: TButton
+            Left = 8
+            Height = 34
+            Top = 10
+            Width = 472
+            Anchors = [akTop, akLeft, akRight]
+            Caption = 'Sign in with GitHub'
+            OnClick = btnDeviceClick
+            TabOrder = 0
+          end
+          object lblCode: TLabel
+            Left = 8
+            Height = 16
+            Top = 54
+            Width = 472
+            Anchors = [akTop, akLeft, akRight]
+            AutoSize = False
+            Caption = 'One-time code (copy this into the GitHub page):'
+          end
+          object eCode: TEdit
+            Left = 8
+            Height = 44
+            Top = 74
+            Width = 380
+            Alignment = taCenter
+            Anchors = [akTop, akLeft, akRight]
+            Enabled = False
+            Font.Height = -24
+            Font.Style = [fsBold]
+            ParentFont = False
+            ReadOnly = True
+            TabOrder = 1
+          end
+          object btnCopyCode: TButton
+            Left = 396
+            Height = 44
+            Top = 74
+            Width = 84
+            Anchors = [akTop, akRight]
+            Caption = 'Copy'
+            Enabled = False
+            OnClick = btnCopyCodeClick
+            TabOrder = 2
+          end
+        end
+        object pnlDevBottom: TPanel
+          Left = 0
+          Height = 46
+          Top = 290
+          Width = 488
+          Align = alBottom
+          BevelOuter = bvNone
+          ClientHeight = 40
+          ClientWidth = 488
+          TabOrder = 2
+          object btnDevCancel: TButton
+            Left = 342
+            Height = 30
+            Top = 6
+            Width = 138
+            Anchors = [akTop, akRight]
+            Caption = 'Cancel sign-in'
+            Enabled = False
+            OnClick = btnDevCancelClick
+            TabOrder = 0
+          end
+        end
+        object mDevMsg: TMemo
+          Left = 8
+          Height = 172
+          Top = 124
+          Width = 472
+          Align = alClient
+          BorderSpacing.Left = 8
+          BorderSpacing.Right = 8
+          BorderSpacing.Bottom = 4
+          BorderStyle = bsNone
+          ParentColor = True
+          ReadOnly = True
+          ScrollBars = ssAutoVertical
+          TabOrder = 1
+          WordWrap = True
+        end
+      end
+      object pnlPat: TPanel
+        Left = 0
+        Height = 336
+        Top = 52
+        Width = 488
+        Align = alClient
+        BevelOuter = bvNone
+        ClientHeight = 336
+        ClientWidth = 488
+        TabOrder = 2
+        Visible = False
+        object lblUser: TLabel
+          Left = 8
+          Height = 16
+          Top = 12
+          Width = 110
+          Caption = 'GitHub username'
+        end
+        object eUser: TEdit
+          Left = 8
+          Height = 28
+          Top = 32
+          Width = 472
+          Anchors = [akTop, akLeft, akRight]
+          TabOrder = 0
+        end
+        object lblPat: TLabel
+          Left = 8
+          Height = 16
+          Top = 70
+          Width = 160
+          Caption = 'Personal Access Token'
+        end
+        object ePat: TEdit
+          Left = 8
+          Height = 28
+          Top = 90
+          Width = 472
+          Anchors = [akTop, akLeft, akRight]
+          EchoMode = emPassword
+          PasswordChar = '*'
+          TabOrder = 1
+        end
+        object lblHint: TLabel
+          Left = 8
+          Height = 16
+          Top = 126
+          Width = 472
+          Anchors = [akTop, akLeft, akRight]
+          AutoSize = False
+          Caption = 'Token needs the "repo" scope.'
+        end
+        object lnkToken: TLabel
+          Cursor = crHandPoint
+          Left = 8
+          Height = 16
+          Top = 148
+          Width = 180
+          Caption = 'Create a token on GitHub...'
+          Font.Color = clBlue
+          Font.Style = [fsUnderline]
+          ParentFont = False
+          OnClick = lnkTokenClick
+        end
+      end
     end
-    object eUser: TEdit
-      Left = 0
-      Height = 28
-      Top = 24
-      Width = 428
-      TabOrder = 0
+    object tsGitLab: TTabSheet
+      Caption = 'GitLab'
+      ClientHeight = 388
+      ClientWidth = 488
+      object lblGlHost: TLabel
+        Left = 8
+        Height = 16
+        Top = 12
+        Width = 472
+        Anchors = [akTop, akLeft, akRight]
+        AutoSize = False
+        Caption = 'GitLab server (gitlab.com, or your own instance)'
+      end
+      object eGlHost: TEdit
+        Left = 8
+        Height = 28
+        Top = 32
+        Width = 472
+        Anchors = [akTop, akLeft, akRight]
+        TabOrder = 0
+        Text = 'https://gitlab.com'
+      end
+      object lblGlUser: TLabel
+        Left = 8
+        Height = 16
+        Top = 70
+        Width = 120
+        Caption = 'GitLab username'
+      end
+      object eGlUser: TEdit
+        Left = 8
+        Height = 28
+        Top = 90
+        Width = 472
+        Anchors = [akTop, akLeft, akRight]
+        TabOrder = 1
+      end
+      object lblGlNs: TLabel
+        Left = 8
+        Height = 16
+        Top = 128
+        Width = 330
+        Caption = 'Group namespace (optional; blank = your own projects)'
+      end
+      object eGlNs: TEdit
+        Left = 8
+        Height = 28
+        Top = 148
+        Width = 472
+        Anchors = [akTop, akLeft, akRight]
+        TabOrder = 2
+      end
+      object lblGlPat: TLabel
+        Left = 8
+        Height = 16
+        Top = 186
+        Width = 160
+        Caption = 'Personal Access Token'
+      end
+      object eGlPat: TEdit
+        Left = 8
+        Height = 28
+        Top = 206
+        Width = 472
+        Anchors = [akTop, akLeft, akRight]
+        EchoMode = emPassword
+        PasswordChar = '*'
+        TabOrder = 3
+      end
+      object lblGlHint: TLabel
+        Left = 8
+        Height = 16
+        Top = 242
+        Width = 472
+        Anchors = [akTop, akLeft, akRight]
+        AutoSize = False
+        Caption = 'Token needs the "api" scope (read and write repositories).'
+      end
+      object lnkGlToken: TLabel
+        Cursor = crHandPoint
+        Left = 8
+        Height = 16
+        Top = 264
+        Width = 180
+        Caption = 'Create a token on GitLab...'
+        Font.Color = clBlue
+        Font.Style = [fsUnderline]
+        ParentFont = False
+        OnClick = lnkGlTokenClick
+      end
+      object mGlMsg: TMemo
+        Left = 8
+        Height = 88
+        Top = 292
+        Width = 472
+        Anchors = [akTop, akLeft, akRight, akBottom]
+        BorderStyle = bsNone
+        ParentColor = True
+        ReadOnly = True
+        ScrollBars = ssAutoVertical
+        TabOrder = 4
+        WordWrap = True
+      end
     end
-    object lblPat: TLabel
-      Left = 0
-      Height = 16
-      Top = 62
-      Width = 160
-      Caption = 'Personal Access Token'
+    object tsSelfHosted: TTabSheet
+      Caption = 'Self-hosted'
+      ClientHeight = 388
+      ClientWidth = 488
+      object lblSsh: TLabel
+        Left = 8
+        Height = 16
+        Top = 12
+        Width = 472
+        Anchors = [akTop, akLeft, akRight]
+        AutoSize = False
+        Caption = 'Base URL or folder for your repositories'
+      end
+      object eSshBase: TEdit
+        Left = 8
+        Height = 28
+        Top = 32
+        Width = 472
+        Anchors = [akTop, akLeft, akRight]
+        TabOrder = 0
+      end
+      object btnBrowseBase: TButton
+        Left = 8
+        Height = 28
+        Top = 68
+        Width = 100
+        Caption = 'Browse...'
+        OnClick = btnBrowseBaseClick
+        TabOrder = 1
+      end
+      object mSshHelp: TMemo
+        Left = 8
+        Height = 270
+        Top = 110
+        Width = 472
+        Anchors = [akTop, akLeft, akRight, akBottom]
+        BorderStyle = bsNone
+        ParentColor = True
+        ReadOnly = True
+        ScrollBars = ssAutoVertical
+        TabOrder = 2
+        WordWrap = True
+      end
     end
-    object ePat: TEdit
-      Left = 0
-      Height = 28
-      Top = 82
-      Width = 428
-      EchoMode = emPassword
-      PasswordChar = '*'
-      TabOrder = 1
+    object tsS3: TTabSheet
+      Caption = 'S3'
+      ClientHeight = 388
+      ClientWidth = 488
+      object lblS3Base: TLabel
+        Left = 8
+        Height = 16
+        Top = 12
+        Width = 472
+        Anchors = [akTop, akLeft, akRight]
+        AutoSize = False
+        Caption = 'Bucket and prefix (s3://my-bucket/gotbox)'
+      end
+      object eS3Base: TEdit
+        Left = 8
+        Height = 28
+        Top = 32
+        Width = 472
+        Anchors = [akTop, akLeft, akRight]
+        TabOrder = 0
+      end
+      object lblS3Profile: TLabel
+        Left = 8
+        Height = 16
+        Top = 70
+        Width = 230
+        Caption = 'AWS profile (blank = default chain)'
+      end
+      object eS3Profile: TEdit
+        Left = 8
+        Height = 28
+        Top = 90
+        Width = 220
+        TabOrder = 1
+      end
+      object lblS3Region: TLabel
+        Left = 260
+        Height = 16
+        Top = 70
+        Width = 200
+        Caption = 'Region (blank = profile default)'
+      end
+      object eS3Region: TEdit
+        Left = 260
+        Height = 28
+        Top = 90
+        Width = 220
+        Anchors = [akTop, akRight]
+        TabOrder = 2
+      end
+      object lblS3Helper: TLabel
+        Left = 8
+        Height = 32
+        Top = 128
+        Width = 472
+        Anchors = [akTop, akLeft, akRight]
+        AutoSize = False
+        Caption = 'git-remote-s3:'
+        WordWrap = True
+      end
+      object mS3Help: TMemo
+        Left = 8
+        Height = 220
+        Top = 160
+        Width = 472
+        Anchors = [akTop, akLeft, akRight, akBottom]
+        BorderStyle = bsNone
+        ParentColor = True
+        ReadOnly = True
+        ScrollBars = ssAutoVertical
+        TabOrder = 3
+        WordWrap = True
+      end
     end
-    object lblHint: TLabel
-      Left = 0
-      Height = 16
-      Top = 118
-      Width = 428
-      AutoSize = False
-      Caption = 'Token needs the "repo" scope.'
-    end
-    object lnkToken: TLabel
-      Cursor = crHandPoint
-      Left = 0
-      Height = 16
-      Top = 140
-      Width = 180
-      Caption = 'Create a token on GitHub...'
-      Font.Color = clBlue
-      Font.Style = [fsUnderline]
-      ParentFont = False
-      OnClick = lnkTokenClick
-    end
-  end
-  object btnValidate: TButton
-    Left = 224
-    Height = 32
-    Top = 396
-    Width = 140
-    Caption = 'Validate && Save'
-    Default = True
-    OnClick = btnValidateClick
-    TabOrder = 3
-  end
-  object btnCancel: TButton
-    Left = 374
-    Height = 32
-    Top = 396
-    Width = 70
-    Cancel = True
-    Caption = 'Cancel'
-    ModalResult = 2
-    TabOrder = 4
   end
 end

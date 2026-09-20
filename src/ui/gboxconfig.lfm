@@ -37,36 +37,25 @@ object ConfigForm: TConfigForm
     Height = 16
     Top = 70
     Width = 110
-    Caption = 'Remote backend'
+    Caption = 'Storage backend'
   end
-  object cboKind: TComboBox
+  object lblBackend: TLabel
     Left = 20
+    Height = 32
+    Top = 88
+    Width = 340
+    AutoSize = False
+    Caption = 'GitHub'
+    WordWrap = True
+  end
+  object btnAccount: TButton
+    Left = 370
     Height = 28
     Top = 88
-    Width = 300
-    ItemHeight = 20
-    ItemIndex = 0
-    Items.Strings = (
-      'GitHub (HTTPS + token)'
-      'Self-hosted git (ssh:// or path)'
-    )
-    Style = csDropDownList
+    Width = 90
+    Caption = 'Change...'
+    OnClick = btnAccountClick
     TabOrder = 2
-    Text = 'GitHub (HTTPS + token)'
-  end
-  object lblSsh: TLabel
-    Left = 20
-    Height = 16
-    Top = 128
-    Width = 380
-    Caption = 'Self-hosted base (ssh://git@host/srv/git or /path) -- git kind'
-  end
-  object eSshBase: TEdit
-    Left = 20
-    Height = 28
-    Top = 146
-    Width = 440
-    TabOrder = 3
   end
   object lblMachine: TLabel
     Left = 20

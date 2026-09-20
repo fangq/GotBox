@@ -17,18 +17,28 @@
 
 unit gboxremote;
 
-{ Abstracts where repos live so GotBox can back folders with either GitHub
-  (HTTPS + PAT, repos auto-created via the REST API) or a self-maintained git
-  server reached over ssh:// (or a plain filesystem / file:// path). For the
-  generic backend, a missing repo is created with `git init --bare` -- over ssh
-  for ssh targets, locally for path targets. }
+{ Abstracts where repos live, so a synced folder can be backed by any of:
+    github -- HTTPS + token, repos auto-created via the REST API
+    gitlab -- the same, on gitlab.com or a self-managed instance
+    git    -- a self-maintained server over ssh:// (or a filesystem / file://
+              path); a missing repo is created with `git init --bare`, over ssh
+              for ssh targets and locally for path targets
+    s3     -- a bucket, via the third-party git-remote-s3 helper
+
+  Besides the providers, this unit answers the two questions every caller has
+  about the configured backend -- "can I use it, and with what token?"
+  (ResolveRemoteAuth) and "what do I call it?" (BackendSummary) -- so the GUI
+  and the headless daemon cannot drift apart. Per-backend *policy* that the
+  sync engine needs (push limits, LFS, poll floors, credential keys) lives in
+  gboxbackend, which has no HTTP dependency. }
 
 {$mode objfpc}{$H+}
 
 interface
 
 uses
-  Classes, SysUtils, gboxgitrunner, gboxgithubapi, gboxconfigstore;
+  Classes, SysUtils, gboxgitrunner, gboxgithubapi, gboxgitlabapi, gboxbackend,
+  gboxcredstore, gboxconfigstore;
 
 type
   TEnsureRemote = (erExists, erCreated, erError);
@@ -62,6 +72,25 @@ type
     function AuthToken: string; override;
   end;
 
+  { GitLab, on gitlab.com or a self-managed instance. HTTPS + PAT, projects
+    auto-created via the REST v4 API. }
+  TGitLabProvider = class(TRemoteProvider)
+  private
+    FHost, FNamespace, FUser, FToken: string;
+    FTokenKind: TGitLabTokenKind;
+    function Owner: string;
+  public
+    constructor Create(const AHost, ANamespace, AUser, AToken: string;
+      ATokenKind: TGitLabTokenKind = tkPat);
+    function PushUrl(const AName: string): string; override;
+    function DisplayUrl(const AName: string): string; override;
+    function EnsureRemote(const AName: string; out ADetail: string): TEnsureRemote;
+      override;
+    function RemoteExists(const AName: string): Boolean; override;
+    function AuthUser: string; override;
+    function AuthToken: string; override;
+  end;
+
   { Generic git backend: ssh://, scp-like user@host:path, or a filesystem path. }
   TGitProvider = class(TRemoteProvider)
   private
@@ -75,8 +104,54 @@ type
     function RemoteExists(const AName: string): Boolean; override;
   end;
 
-{ Builds the provider for a config (token only needed for the github kind). }
+  { An S3 bucket, reached through the third-party git-remote-s3 helper: git
+    itself has no S3 transport, so `s3://bucket/prefix/name` only resolves when
+    that helper is on the git child's PATH. The bucket must already exist --
+    GotBox has no S3 API client and cannot create one. Credentials come from
+    the ambient AWS chain (profile / environment / SSO), never from GotBox. }
+  TS3Provider = class(TRemoteProvider)
+  private
+    FBase, FProfile, FRegion: string;
+  public
+    constructor Create(const ABase, AProfile, ARegion: string);
+    function PushUrl(const AName: string): string; override;
+    function DisplayUrl(const AName: string): string; override;
+    function EnsureRemote(const AName: string; out ADetail: string): TEnsureRemote;
+      override;
+    function RemoteExists(const AName: string): Boolean; override;
+    { 'NAME=VALUE' entries a git child needs to reach the helper and the bucket.
+      Nothing secret: a profile name, a region, and a PATH that includes the
+      helper's directory. }
+    procedure GetRunnerEnv(AOut: TStrings);
+  end;
+
+{ Builds the provider for a config (token only needed for the hosted kinds). }
 function MakeProvider(ACfg: TGotConfig; const AToken: string): TRemoteProvider;
+
+{ Absolute path to the git-remote-s3 helper, or '' when it is not installed.
+  Looks beyond PATH because `pip install --user` drops it in ~/.local/bin, which
+  a desktop-launched GUI often does not inherit -- and git resolves remote
+  helpers from PATH only, so we have to put it there ourselves.
+  GOTBOX_S3_HELPER overrides the search (tests point it at a stub). }
+function S3HelperPath: string;
+
+{ The credential-store account key for this config ('' when the backend keeps
+  no token). }
+function CredAccount(ACfg: TGotConfig): string;
+{ The username a TGitRunner should authenticate as ('' for keyless backends). }
+function RemoteAuthUser(ACfg: TGotConfig): string;
+{ One line describing the configured backend, for Settings and the log. }
+function BackendSummary(ACfg: TGotConfig): string;
+
+{ Fills AOut with the 'NAME=VALUE' entries a git child needs for this config's
+  backend (empty for everything but S3). }
+procedure CollectRemoteEnv(ACfg: TGotConfig; AOut: TStrings);
+
+{ Checks that the configured backend is usable and returns its auth token
+  (empty for the keyless backends). The single place every backend's
+  preconditions live: the GUI (PrepareRemote) and the headless daemon
+  (ResolveRemote) both defer to it. }
+function ResolveRemoteAuth(ACfg: TGotConfig; out AToken, AErr: string): Boolean;
 
 { Joins a base remote and a leaf, inserting a single separator. }
 function JoinRemote(const ABase, ALeaf: string): string;
@@ -312,14 +387,371 @@ begin
   end;
 end;
 
-{ ---- factory ---- }
+{ ---- TGitLabProvider ---- }
+
+constructor TGitLabProvider.Create(const AHost, ANamespace, AUser, AToken: string;
+  ATokenKind: TGitLabTokenKind);
+begin
+  inherited Create;
+  FHost := AHost;
+  if FHost = '' then FHost := GITLAB_DEFAULT_HOST;
+  FNamespace := ANamespace;
+  FUser := AUser;
+  FToken := AToken;
+  FTokenKind := ATokenKind;
+end;
+
+{ The project's namespace: an explicit group, else the signed-in user. }
+function TGitLabProvider.Owner: string;
+begin
+  if FNamespace <> '' then Result := FNamespace
+  else
+    Result := FUser;
+end;
+
+function TGitLabProvider.PushUrl(const AName: string): string;
+begin
+  // Username in the URL, token supplied by GIT_ASKPASS -- same trick as GitHub,
+  // so no secret is ever written into a remote URL. GitLab accepts any username
+  // with a PAT as the password; an OAuth token wants the literal 'oauth2'.
+  Result := InsertUrlUser(DisplayUrl(AName), AuthUser);
+end;
+
+function TGitLabProvider.DisplayUrl(const AName: string): string;
+var
+  host: string;
+begin
+  host := FHost;
+  while (host <> '') and (host[Length(host)] = '/') do
+    SetLength(host, Length(host) - 1);
+  Result := JoinRemote(host, Owner + '/' + AName + '.git');
+end;
+
+function TGitLabProvider.EnsureRemote(const AName: string;
+  out ADetail: string): TEnsureRemote;
+var
+  api: TGitLabApi;
+  httpUrl, err: string;
+  existed: Boolean;
+begin
+  ADetail := '';
+  api := TGitLabApi.Create(FToken, FHost, FTokenKind);
+  try
+    if api.RepoExists(Owner, AName) then Exit(erExists);
+    if api.CreatePrivateRepo(Owner, AName, httpUrl, err, existed) then
+    begin
+      // "already taken" means another machine got there first; it may already
+      // hold commits, so it must not be treated as a fresh repo to seed
+      if existed then Exit(erExists);
+      Exit(erCreated);
+    end;
+    ADetail := 'create failed: ' + err;
+    Result := erError;
+  finally
+    api.Free;
+  end;
+end;
+
+function TGitLabProvider.RemoteExists(const AName: string): Boolean;
+var
+  api: TGitLabApi;
+begin
+  api := TGitLabApi.Create(FToken, FHost, FTokenKind);
+  try
+    Result := api.RepoExists(Owner, AName);
+  finally
+    api.Free;
+  end;
+end;
+
+function TGitLabProvider.AuthUser: string;
+begin
+  if FTokenKind = tkOAuth then Result := 'oauth2'
+  else
+    Result := FUser;
+end;
+
+function TGitLabProvider.AuthToken: string;
+begin
+  Result := FToken;
+end;
+
+{ ---- TS3Provider ---- }
+
+function S3HelperPath: string;
+{$IFDEF WINDOWS}
+const
+  EXE = S3_HELPER_EXE + '.exe';
+{$ELSE}
+const
+  EXE = S3_HELPER_EXE;
+{$ENDIF}
+var
+  home, cand: string;
+  dirs: array of string;
+  i: Integer;
+begin
+  Result := GetEnvironmentVariable('GOTBOX_S3_HELPER');
+  if Result <> '' then
+  begin
+    if not FileExists(Result) then Result := '';
+    Exit;
+  end;
+  Result := FileSearch(EXE, GetEnvironmentVariable('PATH'));
+  if Result <> '' then Exit;
+  // pip/pipx install locations a GUI session's PATH commonly misses
+  home := GetEnvironmentVariable({$IFDEF WINDOWS}'USERPROFILE'{$ELSE}'HOME'{$ENDIF});
+  dirs := [];
+  {$IFDEF WINDOWS}
+  if GetEnvironmentVariable('APPDATA') <> '' then
+    dirs := [GetEnvironmentVariable('APPDATA') + '\Python\Scripts'];
+  {$ELSE}
+  if home <> '' then
+    dirs := [home + '/.local/bin',
+      home + '/.local/pipx/venvs/git-remote-s3/bin'];
+  dirs := Concat(dirs, ['/usr/local/bin', '/opt/homebrew/bin']);
+  {$ENDIF}
+  for i := 0 to High(dirs) do
+  begin
+    cand := IncludeTrailingPathDelimiter(dirs[i]) + EXE;
+    if FileExists(cand) then Exit(cand);
+  end;
+  Result := '';
+end;
+
+constructor TS3Provider.Create(const ABase, AProfile, ARegion: string);
+begin
+  inherited Create;
+  FBase := ABase;
+  while (FBase <> '') and (FBase[Length(FBase)] = '/') do
+    SetLength(FBase, Length(FBase) - 1);
+  FProfile := AProfile;
+  FRegion := ARegion;
+end;
+
+function TS3Provider.PushUrl(const AName: string): string;
+begin
+  // no '.git' suffix: the tail is an S3 key prefix, not a directory
+  Result := JoinRemote(FBase, AName);
+end;
+
+function TS3Provider.DisplayUrl(const AName: string): string;
+begin
+  Result := PushUrl(AName);   // carries no credentials
+end;
+
+procedure TS3Provider.GetRunnerEnv(AOut: TStrings);
+var
+  helper, dir, path: string;
+begin
+  if AOut = nil then Exit;
+  if FProfile <> '' then AOut.Add('AWS_PROFILE=' + FProfile);
+  if FRegion <> '' then
+  begin
+    AOut.Add('AWS_REGION=' + FRegion);
+    AOut.Add('AWS_DEFAULT_REGION=' + FRegion);
+  end;
+  helper := S3HelperPath;
+  if helper = '' then Exit;
+  dir := ExcludeTrailingPathDelimiter(ExtractFilePath(helper));
+  path := GetEnvironmentVariable('PATH');
+  // git looks for remote helpers on PATH only, so a helper installed in
+  // ~/.local/bin is invisible to a GUI launched from a desktop menu
+  if Pos(dir + PathSeparator, path + PathSeparator) = 0 then
+    AOut.Add('PATH=' + dir + PathSeparator + path);
+end;
+
+{ Runs `git ls-remote` with the helper's environment in place. }
+function TS3Provider.RemoteExists(const AName: string): Boolean;
+var
+  git: TGitRunner;
+  env: TStringList;
+begin
+  Result := False;
+  if S3HelperPath = '' then Exit;
+  git := TGitRunner.Create('');
+  env := TStringList.Create;
+  try
+    GetRunnerEnv(env);
+    git.SetExtraEnv(env);
+    Result := git.Git(['ls-remote', PushUrl(AName)]).Ok;
+  finally
+    env.Free;
+    git.Free;
+  end;
+end;
+
+function TS3Provider.EnsureRemote(const AName: string;
+  out ADetail: string): TEnsureRemote;
+var
+  git: TGitRunner;
+  env: TStringList;
+  r: TGitResult;
+begin
+  ADetail := '';
+  if S3HelperPath = '' then
+  begin
+    ADetail := S3_HELPER_MISSING_MSG;
+    Exit(erError);
+  end;
+  if (FBase = '') or (Copy(LowerCase(FBase), 1, 5) <> 's3://') then
+  begin
+    ADetail := 'The S3 base must look like s3://bucket/prefix (got "' +
+      FBase + '").';
+    Exit(erError);
+  end;
+
+  git := TGitRunner.Create('');
+  env := TStringList.Create;
+  try
+    GetRunnerEnv(env);
+    git.SetExtraEnv(env);
+    r := git.Git(['ls-remote', PushUrl(AName)]);
+  finally
+    env.Free;
+    git.Free;
+  end;
+
+  if not r.Ok then
+  begin
+    // a missing bucket or a credential problem must NOT read as "not created
+    // yet" -- that would send us into a push that cannot work
+    ADetail := 'Cannot reach ' + PushUrl(AName) + ': ' + Trim(r.StdErr) +
+      LineEnding + 'The bucket must already exist and your AWS credentials ' +
+      'must allow access to it.';
+    Exit(erError);
+  end;
+  // the helper writes the key space lazily on the first push
+  if Trim(r.StdOut) = '' then Exit(erCreated);
+  Result := erExists;
+end;
+
+{ ---- factory + per-backend policy ---- }
 
 function MakeProvider(ACfg: TGotConfig; const AToken: string): TRemoteProvider;
 begin
-  if SameText(ACfg.RemoteKind, 'git') then
-    Result := TGitProvider.Create(ACfg.SshBase)
+  case ParseBackendKind(ACfg.RemoteKind) of
+    bkGitLab: Result := TGitLabProvider.Create(ACfg.GitLabHost,
+        ACfg.GitLabNamespace, ACfg.RemoteUser, AToken);
+    bkGit: Result := TGitProvider.Create(ACfg.SshBase);
+    bkS3: Result := TS3Provider.Create(ACfg.S3Base, ACfg.AwsProfile, ACfg.AwsRegion);
+    else
+      Result := TGitHubProvider.Create(ACfg.RemoteUser, AToken);
+  end;
+end;
+
+procedure CollectRemoteEnv(ACfg: TGotConfig; AOut: TStrings);
+var
+  prov: TRemoteProvider;
+begin
+  if AOut = nil then Exit;
+  AOut.Clear;
+  if ParseBackendKind(ACfg.RemoteKind) <> bkS3 then Exit;
+  prov := MakeProvider(ACfg, '');
+  try
+    TS3Provider(prov).GetRunnerEnv(AOut);
+  finally
+    prov.Free;
+  end;
+end;
+
+function CredAccount(ACfg: TGotConfig): string;
+begin
+  Result := CredKey(ParseBackendKind(ACfg.RemoteKind), ACfg.GitLabHost,
+    ACfg.RemoteUser);
+end;
+
+function RemoteAuthUser(ACfg: TGotConfig): string;
+begin
+  if BackendNeedsToken(ParseBackendKind(ACfg.RemoteKind)) then
+    Result := ACfg.RemoteUser
   else
-    Result := TGitHubProvider.Create(ACfg.GithubUser, AToken);
+    Result := '';
+end;
+
+function BackendSummary(ACfg: TGotConfig): string;
+var
+  kind: TBackendKind;
+begin
+  kind := ParseBackendKind(ACfg.RemoteKind);
+  case kind of
+    bkGitHub, bkGitLab:
+    begin
+      Result := BackendLabel(kind);
+      if kind = bkGitLab then Result := Result + ' (' + HostPortOf(ACfg.GitLabHost) + ')';
+      if ACfg.RemoteUser <> '' then Result := Result + ' - signed in as ' + ACfg.RemoteUser
+      else
+        Result := Result + ' - not signed in';
+    end;
+    bkGit:
+      if ACfg.SshBase <> '' then Result := BackendLabel(kind) + ' - ' + ACfg.SshBase
+      else
+        Result := BackendLabel(kind) + ' - no base URL set';
+    bkS3:
+    begin
+      if ACfg.S3Base <> '' then Result := 'S3 - ' + ACfg.S3Base
+      else
+        Result := 'S3 - no bucket set';
+      if ACfg.AwsProfile <> '' then Result := Result + ' (profile: ' + ACfg.AwsProfile + ')'
+      else
+        Result := Result + ' (default AWS profile)';
+    end;
+  end;
+end;
+
+function ResolveRemoteAuth(ACfg: TGotConfig; out AToken, AErr: string): Boolean;
+var
+  cred: TCredStore;
+  kind: TBackendKind;
+begin
+  AToken := '';
+  AErr := '';
+  Result := False;
+  kind := ParseBackendKind(ACfg.RemoteKind);
+  case kind of
+    bkGit:
+    begin
+      if ACfg.SshBase = '' then
+      begin
+        AErr := 'Set the self-hosted git base URL in the Account window first.';
+        Exit;
+      end;
+      Exit(True);            // ssh key auth -- no token needed
+    end;
+    bkS3:
+    begin
+      if ACfg.S3Base = '' then
+      begin
+        AErr := 'Set the S3 bucket in the Account window first.';
+        Exit;
+      end;
+      if S3HelperPath = '' then
+      begin
+        AErr := S3_HELPER_MISSING_MSG;
+        Exit;
+      end;
+      Exit(True);            // the AWS credential chain does the rest
+    end;
+  end;
+
+  // github / gitlab: a stored token keyed by account
+  if ACfg.RemoteUser = '' then
+  begin
+    AErr := 'Sign in to ' + BackendLabel(kind) + ' with the Account window first.';
+    Exit;
+  end;
+  cred := TCredStore.Create;
+  try
+    if not cred.LoadToken(CredAccount(ACfg), AToken) then
+    begin
+      AErr := 'No stored ' + BackendLabel(kind) +
+        ' token found. Use Account to sign in again.';
+      Exit;
+    end;
+  finally
+    cred.Free;
+  end;
+  Result := True;
 end;
 
 end.
