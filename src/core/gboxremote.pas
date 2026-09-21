@@ -147,6 +147,35 @@ function BackendSummary(ACfg: TGotConfig): string;
   backend (empty for everything but S3). }
 procedure CollectRemoteEnv(ACfg: TGotConfig; AOut: TStrings);
 
+{ What the Account window should let the user do.
+
+  The window used to present all four backends as equals every time it opened,
+  even when a token from the keyring was already signing the user in. Two things
+  were wrong with that. It said "signed out" when the user was signed in, and it
+  let a GitLab PAT be typed while GitHub was live -- which only rewrites
+  RemoteKind, so the next reconcile re-points the root at the new backend while
+  every linked submodule keeps its old URL. A folder split across two backends
+  is not a state GotBox can sync out of.
+
+  So the window has three states, and the backend can only be chosen in the
+  first of them:
+
+    asFresh            no account configured yet -- pick any backend.
+    asPinnedSignedOut  this folder belongs to a backend, but the token is gone
+                       (expired, revoked, keyring cleared). Re-authenticate THAT
+                       backend; the others stay visible but disabled.
+    asSignedIn         a usable credential is loaded. Nothing to fill in, and
+                       the only action is signing out.
+
+  AHasToken is passed in rather than read here so this stays a pure decision the
+  tests can drive; the caller has already asked the credential store (see
+  ResolveRemoteAuth). It is ignored for the keyless backends, which are "signed
+  in" exactly when they are configured. }
+type
+  TAccountState = (asFresh, asPinnedSignedOut, asSignedIn);
+
+function AccountStateOf(ACfg: TGotConfig; AHasToken: Boolean): TAccountState;
+
 { Checks that the configured backend is usable and returns its auth token
   (empty for the keyless backends). The single place every backend's
   preconditions live: the GUI (PrepareRemote) and the headless daemon
@@ -479,13 +508,13 @@ end;
 { ---- TS3Provider ---- }
 
 function S3HelperPath: string;
-{$IFDEF WINDOWS}
+  {$IFDEF WINDOWS}
 const
   EXE = S3_HELPER_EXE + '.exe';
-{$ELSE}
+  {$ELSE}
 const
   EXE = S3_HELPER_EXE;
-{$ENDIF}
+  {$ENDIF}
 var
   home, cand: string;
   dirs: array of string;
@@ -500,15 +529,20 @@ begin
   Result := FileSearch(EXE, GetEnvironmentVariable('PATH'));
   if Result <> '' then Exit;
   // pip/pipx install locations a GUI session's PATH commonly misses
-  home := GetEnvironmentVariable({$IFDEF WINDOWS}'USERPROFILE'{$ELSE}'HOME'{$ENDIF});
+  home := GetEnvironmentVariable(
+    {$IFDEF WINDOWS}
+'USERPROFILE'
+    {$ELSE}
+    'HOME'
+    {$ENDIF}
+    );
   dirs := [];
   {$IFDEF WINDOWS}
   if GetEnvironmentVariable('APPDATA') <> '' then
     dirs := [GetEnvironmentVariable('APPDATA') + '\Python\Scripts'];
   {$ELSE}
   if home <> '' then
-    dirs := [home + '/.local/bin',
-      home + '/.local/pipx/venvs/git-remote-s3/bin'];
+    dirs := [home + '/.local/bin', home + '/.local/pipx/venvs/git-remote-s3/bin'];
   dirs := Concat(dirs, ['/usr/local/bin', '/opt/homebrew/bin']);
   {$ENDIF}
   for i := 0 to High(dirs) do
@@ -678,8 +712,10 @@ begin
     bkGitHub, bkGitLab:
     begin
       Result := BackendLabel(kind);
-      if kind = bkGitLab then Result := Result + ' (' + HostPortOf(ACfg.GitLabHost) + ')';
-      if ACfg.RemoteUser <> '' then Result := Result + ' - signed in as ' + ACfg.RemoteUser
+      if kind = bkGitLab then Result :=
+          Result + ' (' + HostPortOf(ACfg.GitLabHost) + ')';
+      if ACfg.RemoteUser <> '' then
+        Result := Result + ' - signed in as ' + ACfg.RemoteUser
       else
         Result := Result + ' - not signed in';
     end;
@@ -692,11 +728,30 @@ begin
       if ACfg.S3Base <> '' then Result := 'S3 - ' + ACfg.S3Base
       else
         Result := 'S3 - no bucket set';
-      if ACfg.AwsProfile <> '' then Result := Result + ' (profile: ' + ACfg.AwsProfile + ')'
+      if ACfg.AwsProfile <> '' then
+        Result := Result + ' (profile: ' + ACfg.AwsProfile + ')'
       else
         Result := Result + ' (default AWS profile)';
     end;
   end;
+end;
+
+function AccountStateOf(ACfg: TGotConfig; AHasToken: Boolean): TAccountState;
+var
+  kind: TBackendKind;
+  configured: Boolean;
+begin
+  kind := ParseBackendKind(ACfg.RemoteKind);
+  case kind of
+    // keyless: the base IS the account, so configured means signed in
+    bkGit: configured := ACfg.SshBase <> '';
+    bkS3: configured := ACfg.S3Base <> '';
+    else
+      configured := ACfg.RemoteUser <> '';
+  end;
+  if not configured then Exit(asFresh);
+  if BackendNeedsToken(kind) and (not AHasToken) then Exit(asPinnedSignedOut);
+  Result := asSignedIn;
 end;
 
 function ResolveRemoteAuth(ACfg: TGotConfig; out AToken, AErr: string): Boolean;

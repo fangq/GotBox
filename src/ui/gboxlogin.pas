@@ -86,6 +86,8 @@ type
     lblS3Helper: TLabel;
     mS3Help: TMemo;
     pnlButtons: TPanel;
+    lblSignedIn: TLabel;
+    btnSignOut: TButton;
     btnTest: TButton;
     btnValidate: TButton;
     btnCancel: TButton;
@@ -93,6 +95,7 @@ type
     procedure btnCopyCodeClick(Sender: TObject);
     procedure btnDevCancelClick(Sender: TObject);
     procedure btnDeviceClick(Sender: TObject);
+    procedure btnSignOutClick(Sender: TObject);
     procedure btnTestClick(Sender: TObject);
     procedure btnValidateClick(Sender: TObject);
     procedure FormCloseQuery(Sender: TObject; var CanClose: Boolean);
@@ -108,6 +111,9 @@ type
     FDevCancelled: Boolean;   // user pressed "Cancel sign-in" while polling
     FDevPolling: Boolean;     // a device-flow poll loop is running right now
     FCloseAfterCancel: Boolean;   // close the dialog once the poll has stopped
+    FCfg: TGotConfig;         // the config this dialog is editing (not owned)
+    FState: TAccountState;    // what the window may offer -- see ApplyState
+    FLockKind: TBackendKind;  // the backend this folder belongs to, once it does
     procedure SetBusy(ABusy: Boolean);
     { Fills the read-only code box; an empty code greys it (and Copy) out, so
       neither invites a click before a sign-in has produced a code. }
@@ -119,6 +125,9 @@ type
     procedure ApplyGhMethod;
     { Points the bottom buttons at whatever the active tab can do. }
     procedure ApplyTab;
+    { Applies FState to the window: which backends may be chosen, whether the
+      fields accept input, and whether the action is Save or Sign out. }
+    procedure ApplyState;
     procedure LoadFromConfig(ACfg: TGotConfig);
     procedure SaveToConfig(ACfg: TGotConfig);
     { Cheap, local checks for the active tab; complains and focuses the offender
@@ -386,11 +395,11 @@ var
   ghDevice: Boolean;
 begin
   kind := ActiveKind;
-  ghDevice := (kind = bkGitHub) and rgGhMethod.Visible and
-    (rgGhMethod.ItemIndex = 0);
+  ghDevice := (kind = bkGitHub) and rgGhMethod.Visible and (rgGhMethod.ItemIndex = 0);
 
-  // the device flow completes by itself, so it has no Save step
-  btnValidate.Visible := not ghDevice;
+  // the device flow completes by itself, so it has no Save step -- and when a
+  // credential is already loaded there is nothing to save either
+  btnValidate.Visible := (not ghDevice) and (FState <> asSignedIn);
   if BackendNeedsToken(kind) then btnValidate.Caption := 'Validate && Save'
   else
     btnValidate.Caption := 'Save';
@@ -401,7 +410,7 @@ begin
     btnValidate.Width := 90;
   btnValidate.Left := btnCancel.Left - btnValidate.Width - 8;
   // only the backends we can probe cheaply offer a test
-  btnTest.Visible := kind in [bkGit, bkS3];
+  btnTest.Visible := (kind in [bkGit, bkS3]) and (FState <> asSignedIn);
   btnTest.Left := btnValidate.Left - btnTest.Width - 8;
   btnValidate.Enabled := not ((kind = bkS3) and not FS3Ready);
   btnTest.Enabled := btnValidate.Enabled;
@@ -409,6 +418,70 @@ begin
   if btnValidate.Visible then DefaultControl := btnValidate
   else
     DefaultControl := btnDevice;
+end;
+
+procedure TLoginForm.ApplyState;
+var
+  k: TBackendKind;
+  ts: TTabSheet;
+begin
+  if FState <> asFresh then
+    pcBackend.ActivePage := TabForKind(FLockKind);
+
+  // Fresh: every backend is on the table. Otherwise this folder already belongs
+  // to one, and the others are shown greyed rather than hidden, so it is obvious
+  // which backend is in use instead of looking like the only one that exists.
+  for k := Low(TBackendKind) to High(TBackendKind) do
+  begin
+    ts := TabForKind(k);
+    if Assigned(ts) then ts.Enabled := (FState = asFresh) or (k = FLockKind);
+  end;
+
+  // Signed in: there is nothing to fill in and no Save. Disabling the whole page
+  // control also greys the tab bar, which is the clearest way to say "this is
+  // settled" -- and pcBackendChanging refuses the switch regardless.
+  pcBackend.Enabled := FState <> asSignedIn;
+
+  btnSignOut.Visible := FState = asSignedIn;
+  lblSignedIn.Visible := FState = asSignedIn;
+  if FState = asSignedIn then
+  begin
+    lblSignedIn.Caption := 'Signed in - ' + BackendSummary(FCfg);
+    lblSignedIn.Left := btnSignOut.Left + btnSignOut.Width + 12;
+  end;
+  ApplyTab;
+end;
+
+procedure TLoginForm.btnSignOutClick(Sender: TObject);
+var
+  cred: TCredStore;
+  acct: string;
+begin
+  if MessageDlg('Sign out', 'Sign out of ' + BackendSummary(FCfg) +
+    '?' + LineEnding + LineEnding +
+    'The stored token is deleted from your keyring and syncing stops until you ' +
+    'sign in again. Your synced folder and its history are untouched, and this ' +
+    'folder stays on ' + BackendLabel(FLockKind) + '.', mtConfirmation,
+    [mbYes, mbNo], 0) <> mrYes then Exit;
+
+  acct := CredAccount(FCfg);
+  if acct <> '' then
+  begin
+    cred := TCredStore.Create;
+    try
+      if not cred.DeleteToken(acct) then
+        if Assigned(Log) then
+          Log.Warn('login', 'could not delete the stored token for ' + acct);
+    finally
+      cred.Free;
+    end;
+  end;
+  if Assigned(Log) then Log.Info('login', 'signed out of ' + BackendLabel(FLockKind));
+
+  // stay open on the same backend so the user can sign straight back in; the
+  // backend itself is not up for grabs here (see ApplyState)
+  FState := asPinnedSignedOut;
+  ApplyState;
 end;
 
 procedure TLoginForm.pcBackendChange(Sender: TObject);
@@ -420,6 +493,10 @@ procedure TLoginForm.pcBackendChanging(Sender: TObject; var AllowChange: Boolean
 begin
   // a sign-in is in flight on this tab; its result must not land elsewhere
   AllowChange := not FDevPolling;
+  // and once the folder belongs to a backend, it is not re-chosen here: the
+  // window is already sitting on the locked tab, so any change is a switch away
+  // from it. Disabling the other sheets greys them; this is what stops the click.
+  if FState <> asFresh then AllowChange := False;
 end;
 
 procedure TLoginForm.rgGhMethodClick(Sender: TObject);
@@ -499,11 +576,12 @@ begin
   SetCode(dev.UserCode);
   Clipboard.AsText := dev.UserCode;
   mDevMsg.Lines.Text :=
-    'Enter the code above at ' + dev.VerificationUri + LineEnding + LineEnding +
-    'It is already on your clipboard and that page should be open in your ' +
-    'browser; if it is not, open the address by hand.' + LineEnding + LineEnding +
-    'Then authorize GotBox -- this window finishes the sign-in by itself. The ' +
-    'code expires in about ' + IntToStr(dev.ExpiresIn div 60) + ' minutes.';
+    'Enter the code above at ' + dev.VerificationUri + LineEnding +
+    LineEnding + 'It is already on your clipboard and that page should be open in your '
+    +
+    'browser; if it is not, open the address by hand.' + LineEnding +
+    LineEnding + 'Then authorize GotBox -- this window finishes the sign-in by itself. The '
+    + 'code expires in about ' + IntToStr(dev.ExpiresIn div 60) + ' minutes.';
   mDevMsg.Update;
   OpenURL(dev.VerificationUri);
 
@@ -589,8 +667,7 @@ begin
   if ModalResult <> mrOK then SetCode('');
 end;
 
-procedure TLoginForm.DoTokenValidate(AKind: TBackendKind;
-  const AHost, AToken: string);
+procedure TLoginForm.DoTokenValidate(AKind: TBackendKind; const AHost, AToken: string);
 var
   th: TValidateThread;
   login, err, acct: string;
@@ -620,8 +697,8 @@ begin
 
   if not okValidated then
   begin
-    MsgError('Could not validate the ' + BackendLabel(AKind) + ' token:' +
-      LineEnding + err);
+    MsgError('Could not validate the ' + BackendLabel(AKind) +
+      ' token:' + LineEnding + err);
     Exit;
   end;
 
@@ -782,8 +859,28 @@ end;
 
 procedure TLoginForm.LoadFromConfig(ACfg: TGotConfig);
 var
-  helper: string;
+  helper, tok: string;
+  cred: TCredStore;
+  hasToken: Boolean;
 begin
+  FCfg := ACfg;
+  // Ask the keyring what it actually holds. The window used to assume nobody was
+  // signed in every time it opened, which is why it offered four backends to a
+  // user who was already syncing on one of them.
+  hasToken := False;
+  if BackendNeedsToken(ParseBackendKind(ACfg.RemoteKind)) and
+    (CredAccount(ACfg) <> '') then
+  begin
+    cred := TCredStore.Create;
+    try
+      hasToken := cred.LoadToken(CredAccount(ACfg), tok);
+    finally
+      cred.Free;
+    end;
+  end;
+  FLockKind := ParseBackendKind(ACfg.RemoteKind);
+  FState := AccountStateOf(ACfg, hasToken);
+
   // GitHub
   eUser.Text := ACfg.RemoteUser;
   ePat.Text := '';
@@ -819,9 +916,9 @@ begin
   eSshBase.Text := ACfg.SshBase;
   mSshHelp.Lines.Text :=
     'Examples:  ssh://git@server.example.edu/srv/git   |   ' +
-    'git@server:srv/git   |   /mnt/backup/git' + LineEnding + LineEnding +
-    'GotBox authenticates with your existing ssh keys, so there is nothing to ' +
-    'store in the keyring. A missing repository is created on the server with ' +
+    'git@server:srv/git   |   /mnt/backup/git' + LineEnding +
+    LineEnding + 'GotBox authenticates with your existing ssh keys, so there is nothing to '
+    + 'store in the keyring. A missing repository is created on the server with ' +
     '`git init --bare`.';
 
   // S3
@@ -839,8 +936,8 @@ begin
   eS3Region.Enabled := FS3Ready;
   mS3Help.Lines.Text :=
     'S3 is reached through the git-remote-s3 helper (git itself has no S3 ' +
-    'transport). Install it with:  pipx install git-remote-s3' + LineEnding +
-    LineEnding +
+    'transport). Install it with:  pipx install git-remote-s3' +
+    LineEnding + LineEnding +
     'Credentials come from your AWS profile or environment -- GotBox stores ' +
     'no AWS keys. The bucket must already exist. Note that GotBox polls S3 at ' +
     'most once a minute, so changes from another machine can take that long ' +
@@ -906,6 +1003,7 @@ begin
   FCloseAfterCancel := False;
   LoadFromConfig(ACfg);
   ApplyGhMethod;   // also calls ApplyTab
+  ApplyState;      // ... which ApplyState then overrides to suit the state
   CenterForm(Self);
   Result := ShowModal = mrOK;
   if Result then SaveToConfig(ACfg);

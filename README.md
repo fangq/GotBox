@@ -167,6 +167,20 @@ The **Account & storage** window has one tab per backend — **GitHub**,
 **GitLab**, **Self-hosted** and **S3**. Pick a tab, fill it in, and press
 *Save*; that tab becomes the backend GotBox uses.
 
+The backend is chosen **once**. After that the window reflects where your folder
+actually lives rather than offering the choice again:
+
+- **Signed in** — it shows the account in use and the only action is *Sign out*;
+  the tabs are greyed. Signing out deletes the stored token and stops syncing
+  until you sign in again. Your folder, its history and its backend are untouched.
+- **Signed out** (token expired, revoked, or keyring cleared) — only your own
+  backend's tab accepts input, so you re-authenticate the account you already
+  have. The other tabs stay visible, greyed, so it is clear which one is in use.
+
+This is deliberate: your folder's root repository and every linked sub-folder are
+mapped to one backend, and picking a different tab would re-point the root while
+leaving the linked folders behind on the old host.
+
 #### GitHub
 
 Two ways to sign in:
@@ -239,7 +253,7 @@ Right-click (or click) the tray icon:
 | **Sync now** | Force an immediate sync of everything. |
 | **Status…** | Per-repo state (synced / syncing / conflict / error / paused), last-sync time, and a live activity log. Pause/resume, sync, or open individual repos here. |
 | **Settings…** | Sync folder, backend, history cap, intervals, ignore patterns, machine name, LFS threshold. |
-| **Account…** | GitHub username + token. |
+| **Account…** | The account in use, and *Sign out*; or sign in when signed out. |
 | **Export log…** | Save the activity log to a file (handy for bug reports). |
 | **Enable Explorer icon overlays…** / **Finder icon overlays…** | Turn on per-file status badges in your file manager (*Explorer* on Windows, *Finder* on macOS) — see [Explorer](#explorer-icon-overlays-windows) / [Finder](#finder-icon-overlays-macos) overlays. |
 | **About** | Version and project link. |

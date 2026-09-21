@@ -20,6 +20,24 @@ object LoginForm: TLoginForm
     ClientHeight = 52
     ClientWidth = 520
     TabOrder = 1
+    object lblSignedIn: TLabel
+      Left = 12
+      Height = 16
+      Top = 16
+      Width = 200
+      Caption = ''
+      ParentColor = False
+    end
+    object btnSignOut: TButton
+      Left = 12
+      Height = 32
+      Top = 8
+      Width = 90
+      Caption = 'Sign out'
+      OnClick = btnSignOutClick
+      TabOrder = 3
+      Visible = False
+    end
     object btnTest: TButton
       Left = 224
       Height = 32

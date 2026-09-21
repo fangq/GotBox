@@ -97,11 +97,12 @@ begin
     // JoinRemote always uses '/' (a remote URL separator), regardless of the
     // host path separator -- so compare against that, not the OS delimiter.
     Check(gprov.PushUrl('foo') = base + '/foo.git', 'push url for local base');
-    Check(gprov.EnsureRemote('foo', detail) = erCreated, 'creates local bare repo (' +
-      detail + ')');
+    Check(gprov.EnsureRemote('foo', detail) = erCreated,
+      'creates local bare repo (' + detail + ')');
     Check(DirectoryExists(IncludeTrailingPathDelimiter(base) + 'foo.git'),
       'bare repo exists on disk');
-    Check(gprov.EnsureRemote('foo', detail) = erExists, 'second call sees existing repo');
+    Check(gprov.EnsureRemote('foo', detail) = erExists,
+      'second call sees existing repo');
   finally
     gprov.Free;
   end;
@@ -123,8 +124,8 @@ begin
     glprov.Free;
   end;
 
-  glprov := TGitLabProvider.Create('https://git.ex.edu:8443/gl', 'team/sub',
-    'alice', 'glpat-x');
+  glprov := TGitLabProvider.Create('https://git.ex.edu:8443/gl',
+    'team/sub', 'alice', 'glpat-x');
   try
     Check(glprov.DisplayUrl('photos') =
       'https://git.ex.edu:8443/gl/team/sub/photos.git',
@@ -270,6 +271,41 @@ begin
     Check(RemoteAuthUser(cfg) = '', 'the ssh backend authenticates as nobody');
     cfg.RemoteKind := 'github';
     Check(RemoteAuthUser(cfg) = 'alice', 'github authenticates as the login');
+
+    // ---- what the Account window is allowed to offer -------------------------
+    // The backend can only be CHOSEN while fresh. Once a folder belongs to one,
+    // the window pins it: offering the others would let a GitLab PAT be typed
+    // over a live GitHub account, which re-points the root on the next reconcile
+    // and strands every linked submodule on the old host.
+    cfg.RemoteKind := 'github';
+    cfg.RemoteUser := '';
+    Check(AccountStateOf(cfg, False) = asFresh, 'no account yet -> fresh');
+    Check(AccountStateOf(cfg, True) = asFresh,
+      'a stray token without an account is still fresh');
+
+    cfg.RemoteUser := 'alice';
+    Check(AccountStateOf(cfg, True) = asSignedIn, 'account + token -> signed in');
+    Check(AccountStateOf(cfg, False) = asPinnedSignedOut,
+      'account but no token -> pinned, re-authenticate that backend');
+
+    cfg.RemoteKind := 'gitlab';
+    Check(AccountStateOf(cfg, True) = asSignedIn, 'gitlab: account + token');
+    Check(AccountStateOf(cfg, False) = asPinnedSignedOut, 'gitlab: token gone');
+
+    // the keyless backends have no token to hold: the base IS the account
+    cfg.RemoteKind := 'git';
+    cfg.SshBase := '';
+    Check(AccountStateOf(cfg, False) = asFresh, 'ssh with no base -> fresh');
+    cfg.SshBase := 'ssh://git@git.ex.edu/srv/git';
+    Check(AccountStateOf(cfg, False) = asSignedIn,
+      'ssh is signed in once configured, with no token');
+
+    cfg.RemoteKind := 's3';
+    cfg.S3Base := '';
+    Check(AccountStateOf(cfg, True) = asFresh, 's3 with no bucket -> fresh');
+    cfg.S3Base := 's3://b/p';
+    Check(AccountStateOf(cfg, False) = asSignedIn,
+      's3 is signed in once configured, with no token');
   finally
     cfg.Free;
   end;
