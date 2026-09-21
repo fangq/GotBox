@@ -412,8 +412,8 @@ begin
         if FOversize.Count = 0 then FOversizeNotified := False;
       end;
 
-      outcome := RunSyncCycle(git, FMachine, detail, conflicts, changed, FBranch,
-        FKind, FHardLimit);
+      outcome := RunSyncCycle(git, FMachine, detail, conflicts, changed,
+        FBranch, FKind, FHardLimit);
     end
     else
       // managed: transport committed state only -- never set the user's git
@@ -458,24 +458,33 @@ begin
         else
         begin
           Inc(FErrorStreak);
-          // A file over GitHub's 100 MB limit that is already recorded in a local
-          // commit makes the pre-receive hook reject every push of that commit,
+          // A file over the backend's per-file limit that is already recorded in
+          // a local commit makes the remote reject every push of that commit,
           // forever -- the size guard above only keeps new ones out. Rewrite the
           // unpushed commits without it (the file itself is kept in the folder,
           // untracked) so the repo can publish everything else again. The file
           // stays flagged by the FOversize block below, which is what tells the
           // user it isn't syncing.
-          if IsOversizeRejection(detail) and FAutoSync then
+
+          // Ask gboxbackend whether this is a size rejection: it knows each
+          // backend's wording, where a GitHub-only matcher silently never
+          // matched GitLab's ("maximum allowed size" / HTTP 413) and left such a
+          // repo stuck forever. A backend with no declared per-file limit still
+          // lands here and is turned away by DropOversizeFromUnpushed with a
+          // reason, rather than being ignored without trace.
+          if IsSizeRejection(FKind, detail) and FAutoSync then
           begin
             FOversize.Clear;
-            if DropOversizeFromUnpushed(git, FBranch, FMachine, FOversize, td) then
+            if DropOversizeFromUnpushed(git, FBranch, FMachine,
+              FOversize, td, FHardLimit) then
             begin
               if Assigned(Log) then Log.Info('worker', FName + ': ' + td);
               if Assigned(FOnNotice) then
                 FOnNotice('GotBox - unblocked ' + FName,
-                  'A file too large for GitHub was removed from the pending ' +
-                  'commits so the rest of ' + FName + ' can sync; the file is ' +
-                  'still in your folder: ' + FOversize[0]);
+                  'A file too large for ' + BackendLabel(FKind) +
+                  ' was removed ' + 'from the pending commits so the rest of ' +
+                  FName + ' can sync; the file is still in your folder: ' +
+                  FOversize[0]);
               FOversizeNotified := True;   // the notice above says it all
               FErrorStreak := 0;
               FBackoffUntil := 0;
@@ -587,13 +596,14 @@ begin
       FStuckNotified := False;
     end;
 
-    // A file too large for GitHub that LFS can't absorb is a persistent local
+    // A file too large for the backend that LFS can't absorb is a persistent local
     // problem the user must fix: it was kept out of the commit, so the rest of
     // the repo still syncs, but keep the repo flagged (overriding the cycle's
     // "synced") and notify once so the user knows why that file isn't syncing.
     if (FOversize.Count > 0) and (outcome <> soOffline) then
     begin
-      td := 'file too large for GitHub (>100 MB) without git-lfs: ' + FOversize[0];
+      td := Format('file too large for %s (>%d MB) without git-lfs: %s',
+        [BackendLabel(FKind), FHardLimit div (1024 * 1024), FOversize[0]]);
       if FOversize.Count > 1 then
         td := td + Format(' (+%d more)', [FOversize.Count - 1]);
       if Assigned(FStatus) then FStatus.SetState(FName, rsError,

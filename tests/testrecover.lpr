@@ -152,7 +152,7 @@ var
   end;
 
 var
-  base, bare, aDir, bDir, cDir, detail: string;
+  base, bare, aDir, bDir, cDir, detail, tracked: string;
   git: TGitRunner;
   conflicts, dropped, blocked: TStringList;
   recovered: Integer;
@@ -263,9 +263,7 @@ begin
       'origin/main..HEAD']).StdOut), -1) = 1, 'oversize: one unpushed commit left');
     Check(Pos('big.bin', git.GitQuiet(['ls-tree', '-r', '--name-only', 'HEAD']).StdOut) =
       0, 'oversize: big.bin is gone from the new tree');
-    Check(Pos('keep.txt', git.GitQuiet(['ls-tree', '-r', '--name-only',
-      'HEAD']).StdOut) >
-      0, 'oversize: the ordinary file survived the rewrite');
+    Check(Pos('keep.txt', git.GitQuiet(['ls-tree', '-r', '--name-only', 'HEAD']).StdOut) > 0, 'oversize: the ordinary file survived the rewrite');
 
     // the bytes are handed back to the user rather than discarded
     Check(FileExists(IncludeTrailingPathDelimiter(bDir) + 'big.bin'),
@@ -294,12 +292,32 @@ begin
     Check(not DropOversizeFromUnpushed(git, 'main', 'bob', dropped, detail, 32),
       'oversize: declines when no oversize blob is in the unpushed range');
 
+
     // A detached HEAD is never rewritten: the replacement commit would move no
     // branch, so the push would be rejected again. Stage a real oversize commit
     // first, so the only reason to decline is the detached HEAD.
     WriteText(IncludeTrailingPathDelimiter(bDir) + 'big2.bin', StringOfChar('y', 64));
     git.Git(['add', '-A']);
     git.Git(['commit', '-m', 'add big2']);
+    // With unpushed commits on the branch, a limit of 0 -- what a backend that
+    // declares no per-file limit reports -- would compare EVERY blob as oversize
+    // and strip the whole tree out of them. It has to be refused outright.
+    tracked := git.GitQuiet(['ls-tree', '-r', '--name-only', 'HEAD']).StdOut;
+    Check(Pos('keep.txt', tracked) > 0, 'oversize: setup: the tree has content');
+    Check(StrToIntDef(Trim(git.GitQuiet(['rev-list', '--count',
+      'origin/main..HEAD']).StdOut), -1) > 0, 'oversize: setup: commits unpushed');
+    dropped.Clear;
+    Check(not DropOversizeFromUnpushed(git, 'main', 'bob', dropped, detail, 0),
+      'oversize: refuses a limit of 0 instead of calling every blob oversize');
+    Check(Pos('no per-file push limit', detail) > 0,
+      'oversize: and says why (' + detail + ')');
+    Check(dropped.Count = 0, 'oversize: nothing was dropped');
+    Check(git.GitQuiet(['ls-tree', '-r', '--name-only', 'HEAD']).StdOut = tracked,
+      'oversize: the tree is untouched after the refusal');
+    dropped.Clear;
+    Check(not DropOversizeFromUnpushed(git, 'main', 'bob', dropped, detail, -1),
+      'oversize: a negative limit is refused too');
+
     Check(git.Git(['checkout', '--detach', 'HEAD']).Ok, 'oversize: HEAD detached');
     Check(not git.GitQuiet(['symbolic-ref', '-q', 'HEAD']).Ok,
       'oversize: HEAD really is detached');
@@ -355,7 +373,8 @@ begin
 
     // and it must stay that way: add -A re-stages it, the backstop unstages it
     git.AddAll;
-    Check(Pos('grown.bin', git.GitQuiet(['diff', '--cached', '--name-only']).StdOut) > 0, 'grown: add -A stages it again (tracked path)');
+    Check(Pos('grown.bin', git.GitQuiet(['diff', '--cached', '--name-only']).StdOut) >
+      0, 'grown: add -A stages it again (tracked path)');
     Check(UnstageOversize(git, 32, nil) = 1, 'grown: the backstop unstages it');
     Check(git.Push(False).Ok, 'grown: the branch pushes');
   finally

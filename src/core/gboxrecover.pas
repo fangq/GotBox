@@ -63,10 +63,6 @@ uses
 function RecloneCorruptRepo(AGit: TGitRunner; const ABranch, AMachine: string;
   out ADetail: string; out ARecovered: Integer): Boolean;
 
-{ True if AText is a push rejected because a file exceeds GitHub's size limit
-  (the GH001 pre-receive rejection), as opposed to any other push failure. }
-function IsOversizeRejection(const AText: string): Boolean;
-
 { Rewrite AGit's not-yet-pushed commits so they no longer contain any blob at or
   over GITHUB_FILE_LIMIT, making the branch pushable again. The offending paths
   are appended to ADropped and added to the exclude block, so the next cycle
@@ -86,11 +82,13 @@ function IsOversizeRejection(const AText: string): Boolean;
   Only for auto-synced repos: it collapses the unpushed commits into one, which
   would discard a user's hand-written commit messages in a managed repo.
 
-  AHardLimitBytes is the size that makes a blob unpushable; it only ever differs
-  from GitHub's limit in tests. }
+  AHardLimitBytes is the size that makes a blob unpushable, and it has no default
+  on purpose: the caller knows which backend this repo pushes to, and passing the
+  wrong limit here rewrites history. A non-positive value -- what a backend that
+  declares no per-file limit reports -- is refused rather than treated as "every
+  blob is oversize", which would drop the whole tree. }
 function DropOversizeFromUnpushed(AGit: TGitRunner; const ABranch, AMachine: string;
-  ADropped: TStrings; out ADetail: string;
-  AHardLimitBytes: Int64 = GITHUB_FILE_LIMIT): Boolean;
+  ADropped: TStrings; out ADetail: string; AHardLimitBytes: Int64): Boolean;
 
 implementation
 
@@ -352,15 +350,6 @@ end;
   Recovery 2: an oversize blob that already reached a local commit
   --------------------------------------------------------------------------- }
 
-function IsOversizeRejection(const AText: string): Boolean;
-var
-  s: string;
-begin
-  s := LowerCase(AText);
-  Result := (Pos('gh001', s) > 0) or (Pos('file size limit', s) > 0) or
-    (Pos('exceeds github', s) > 0);
-end;
-
 { Append to AOut every path in ACommit's tree whose blob is at/over
   GITHUB_FILE_LIMIT, and to ASrc the commit it was read from (kept index-parallel
   with AOut, so a file can later be restored from a commit that still has it).
@@ -448,8 +437,7 @@ begin
 end;
 
 function DropOversizeFromUnpushed(AGit: TGitRunner; const ABranch, AMachine: string;
-  ADropped: TStrings; out ADetail: string;
-  AHardLimitBytes: Int64 = GITHUB_FILE_LIMIT): Boolean;
+  ADropped: TStrings; out ADetail: string; AHardLimitBytes: Int64): Boolean;
 var
   base, head, newTree, newHead, full, ref: string;
   r: TGitResult;
@@ -460,6 +448,15 @@ begin
   Result := False;
   ADetail := '';
   if ADropped = nil then Exit;
+
+  // Refuse to scan without a real limit. At 0 every blob compares as oversize,
+  // so this would strip the entire tree out of the unpushed commits.
+  if AHardLimitBytes <= 0 then
+  begin
+    ADetail := 'this backend declares no per-file push limit, so the offending ' +
+      'file cannot be identified automatically -- remove it by hand';
+    Exit;
+  end;
 
   // Rewriting a detached HEAD would build a commit no branch points at, so the
   // push would be rejected all over again (the worker re-attaches HEAD itself).
@@ -613,8 +610,8 @@ begin
     if paths.Count > 1 then more := Format(' +%d more', [paths.Count - 1]);
     ADetail := Format('took %d file(s) too large for GitHub out of the unpushed ' +
       'history (%s%s); %d kept in the repo at their last pushed version, ' +
-      '%d written back to the folder', [paths.Count, paths[0],
-      more, kept, restored]);
+      '%d written back to the folder', [paths.Count, paths[0], more,
+      kept, restored]);
     if Assigned(Log) then Log.Info('recover', ADetail);
     Result := True;
   finally
