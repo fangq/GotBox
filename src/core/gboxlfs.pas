@@ -17,10 +17,10 @@
 
 unit gboxlfs;
 
-{ Optional Git LFS integration. GitHub rejects a plain `git push` containing any
-  file over 100 MB, which would break a repo's sync. To avoid that, files at or
-  above a configurable size threshold are registered with Git LFS *before* they
-  are first committed: the repo's LFS filters/hooks are installed and the path
+{ Optional Git LFS integration. A backend that caps per-file push size rejects
+  any push carrying a file over it -- 100 MB on GitHub -- which would break a
+  repo's sync. To avoid that, files at or above a configurable size threshold are
+  registered with Git LFS *before* they are first committed: the repo's LFS filters/hooks are installed and the path
   is added to .gitattributes, so the following `git add`/commit stores the file
   as a small LFS pointer (the bytes upload to the LFS store on push).
 
@@ -34,10 +34,9 @@ interface
 uses
   Classes, SysUtils, gboxgitrunner, gboxexclude;
 
-const
-  { GitHub rejects a plain `git push` containing any file over this size; nothing
-    GotBox can do transports such a file without Git LFS. }
-  GITHUB_FILE_LIMIT = Int64(100) * 1024 * 1024;
+{ The per-file push limit lives in gboxbackend, which knows it varies by
+  backend. This unit takes whatever limit it is given and has no opinion of its
+  own about how big is too big. }
 
 { True if the `git lfs` command works (git-lfs is installed and on PATH). }
 function LfsAvailable(AGit: TGitRunner): Boolean;

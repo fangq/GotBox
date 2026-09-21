@@ -64,7 +64,7 @@ function RecloneCorruptRepo(AGit: TGitRunner; const ABranch, AMachine: string;
   out ADetail: string; out ARecovered: Integer): Boolean;
 
 { Rewrite AGit's not-yet-pushed commits so they no longer contain any blob at or
-  over GITHUB_FILE_LIMIT, making the branch pushable again. The offending paths
+  over AHardLimitBytes, making the branch pushable again. The offending paths
   are appended to ADropped and added to the exclude block, so the next cycle
   neither re-commits them nor forgets them.
 
@@ -351,7 +351,7 @@ end;
   --------------------------------------------------------------------------- }
 
 { Append to AOut every path in ACommit's tree whose blob is at/over
-  GITHUB_FILE_LIMIT, and to ASrc the commit it was read from (kept index-parallel
+  AHardLimitBytes, and to ASrc the commit it was read from (kept index-parallel
   with AOut, so a file can later be restored from a commit that still has it).
   `ls-tree -r -l` prints "<mode> <type> <sha> <size>"#9"<path>"; a gitlink has
   '-' for the size and is skipped by the numeric parse. }
