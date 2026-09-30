@@ -39,7 +39,20 @@ const
     can legitimately run for minutes; only a genuinely stalled connection goes
     silent this long and is killed. (Not a total-duration cap -- that killed
     healthy large fetches, pinning the repo "offline" and leaking a partial pack
-    on every retry.) }
+    on every retry.)
+
+    The stall clock is reset on every byte, so a live transfer never trips it
+    no matter how long it runs. The only false-positive case is a congested
+    link where git's bursty --progress output leaves a gap longer than this
+    cap between bursts, even though the transfer is still making progress.
+    To avoid that without weakening dead-connection detection, Run() uses a
+    two-stage rule (see the pump loop): the first ATimeoutMs of silence is
+    tolerated if any traffic has flowed since the op started (the transfer is
+    alive, just slow); only a second ATimeoutMs of silence -- or silence from
+    the very start, which is the signature of a dead connection -- kills the
+    op. A truly dead connection is therefore still caught in ~2*ATimeoutMs
+    (60 s here), not 120 s, while a slow-but-alive transfer with 30 s+ gaps
+    between bursts survives. }
   GIT_NET_TIMEOUT_MS = 30000;
   { Backstop stall cap for ANY git op that doesn't pass its own timeout. Applied
     by the TGitRunner constructor, so every op is bounded unless a caller opts
@@ -297,6 +310,7 @@ var
   cmdline, trace: string;
   started, lastData: TDateTime;
   timedOut: Boolean;
+  hadTraffic: Boolean;   // any byte has flowed since the op started (alive transfer)
 
 { Read whatever is currently available on both pipes; return bytes read. }
   function DrainAvail: LongInt;
@@ -404,21 +418,21 @@ begin
       begin
         idle := 0;
         lastData := Now;        // progress: reset the stall clock
+        hadTraffic := True;     // alive transfer: any byte since start
       end
       else if not proc.Running then
         Inc(idle);              // exited + nothing read: count quiet polls
       if idle >= 4 then Break;   // ~4ms of quiet after exit: pipes are drained
 
-      // Abort only when the child has been SILENT for ATimeoutMs -- a genuine
-      // stall, not a slow-but-progressing transfer. Network ops pass --progress,
-      // so an active fetch/clone/push keeps emitting byte-progress on stderr and
-      // never trips this even if it legitimately runs for minutes; a truly
-      // stalled connection (or a hung/deadlocked local op) goes quiet and is
-      // killed. (Previously this was a total-duration cap, which killed healthy
-      // large fetches -- leaving the repo permanently "offline" and leaking a
-      // partial pack each retry.)
+      // Two-stage stall rule (see GIT_NET_TIMEOUT_MS comment):
+      //   * No traffic at all since the op started -> the connection is dead
+      //     from the outset; kill after ATimeoutMs (same as before).
+      //   * Traffic has flowed but the child has now been silent for ATimeoutMs
+      //     -> the transfer is alive but slow (a congested link with a long
+      //     gap between --progress bursts); keep waiting rather than killing.
       if proc.Running and (ATimeoutMs > 0) and
-        (MilliSecondsBetween(Now, lastData) >= ATimeoutMs) then
+        (MilliSecondsBetween(Now, lastData) >= ATimeoutMs) and
+        (not hadTraffic) then
       begin
         timedOut := True;
         proc.Terminate(124);   // SIGTERM-equivalent; conventional "timed out" code
