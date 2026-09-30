@@ -39,8 +39,14 @@ const
     can legitimately run for minutes; only a genuinely stalled connection goes
     silent this long and is killed. (Not a total-duration cap -- that killed
     healthy large fetches, pinning the repo "offline" and leaking a partial pack
-    on every retry.) }
-  GIT_NET_TIMEOUT_MS = 30000;
+    on every retry.)
+
+    30 s is too short when a large batch of files is being transferred over a
+    congested link: git's --progress output is bursty, and a single 30 s gap
+    between bursts (no new bytes) would kill a fetch that is still making
+    progress. 120 s gives a slow-but-alive transfer room to keep flowing while
+    still catching a truly dead connection in a reasonable time. }
+  GIT_NET_TIMEOUT_MS = 120000;
   { Backstop stall cap for ANY git op that doesn't pass its own timeout. Applied
     by the TGitRunner constructor, so every op is bounded unless a caller opts
     out (DefaultTimeoutMs := 0). An op silent this long is stuck (e.g. a Windows
