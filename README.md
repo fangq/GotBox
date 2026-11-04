@@ -373,8 +373,8 @@ defaults cover the usual editor/OS churn:
 
 ```
 .git       *.tmp      *~         *.bak      #*#        .#*
-*.swp      *.swo      ~$*        .~lock.*#  .DS_Store  ._*
-Thumbs.db  desktop.ini           $RECYCLE.BIN          .Trash-*
+*.swp      *.swo      ~$*        .~lock.*#  .~*        .DS_Store
+._*        Thumbs.db  desktop.ini           $RECYCLE.BIN          .Trash-*
 *.part     *.crdownload
 ```
 

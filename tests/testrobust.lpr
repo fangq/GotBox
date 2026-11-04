@@ -520,6 +520,8 @@ var
     Touch('notes.txt~');           // editor backup
     Touch('~$report.docx');        // MS Office lock file
     Touch('.~lock.report.odt#');   // LibreOffice lock file
+    Touch('.~port.docx');          // WPS Office lock file
+    Touch('~WRL0001.tmp');         // MS Word save temp file
     Touch('#autosave#');           // emacs auto-save ('#' also starts a comment)
     Touch('.DS_Store');            // macOS metadata
     Touch('deep/sub/Thumbs.db');   // OS metadata, at depth
@@ -549,6 +551,8 @@ var
       Check(not Lists(staged, '~$report.docx'), 'A5: Office lock file is not staged');
       Check(not Lists(staged, '.~lock.report.odt#'),
         'A5: LibreOffice lock file is not staged');
+      Check(not Lists(staged, '.~port.docx'), 'A5: WPS lock file is not staged');
+      Check(not Lists(staged, '~WRL0001.tmp'), 'A5: Word temp file is not staged');
       Check(not Lists(staged, '#autosave#'),
         'A5: emacs auto-save is not staged (leading # escaped, not a comment)');
       Check(not Lists(staged, '.DS_Store'), 'A5: macOS metadata is not staged');

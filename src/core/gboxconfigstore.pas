@@ -153,7 +153,7 @@ begin
 end;
 
 const
-  DEFAULT_IGNORE_GLOBS: array[0..17] of string = (
+  DEFAULT_IGNORE_GLOBS: array[0..18] of string = (
     '.git',
     '*.tmp',
     '*~',              // emacs/gedit/kate backup
@@ -164,6 +164,7 @@ const
     '*.swo',
     '~$*',             // MS Office lock/owner file
     '.~lock.*#',       // LibreOffice lock file
+    '.~*',             // WPS Office lock file (".~" + name minus its first 2 chars)
     '.DS_Store',       // macOS Finder metadata
     '._*',             // macOS AppleDouble sidecar
     'Thumbs.db',       // Windows thumbnail cache
