@@ -197,9 +197,42 @@ procedure RefreshTrayIconTheme;
 begin
   gtk_icon_theme_rescan_if_needed(gtk_icon_theme_get_default);
 end;
+
+procedure gtk_rc_parse_string(rc_string: PChar); cdecl;
+  external 'libgtk-x11-2.0.so.0';
+function gdk_screen_get_default: Pointer; cdecl; external 'libgdk-x11-2.0.so.0';
+function gdk_screen_is_composited(screen: Pointer): LongBool; cdecl;
+  external 'libgdk-x11-2.0.so.0';
+
+// The classic XEmbed tray (GtkStatusIcon -> a GtkTrayIcon plug) can only be
+// truly transparent when the X server offers a 32-bit ARGB visual and a
+// compositor. Over x2go/NX there is neither, so GTK falls back to painting the
+// plug with the theme's window background -- a light square behind the icon on
+// a dark panel. A "<parent>" background pixmap makes the plug show the panel
+// through instead, and the icon's alpha edges blend onto the panel colour.
+// Must run before the tray icon widget is created.
+//
+// Only on a NON-composited screen: with a compositor the tray may hand GTK a
+// 32-bit ARGB visual, and GTK then makes the plug transparent by itself. A
+// parent-relative background on a 32-bit window under a 24-bit tray would be an
+// X BadMatch error, which GDK treats as fatal.
+procedure UseParentBackgroundForTray;
+var
+  scr: Pointer;
+begin
+  scr := gdk_screen_get_default;
+  if (scr = nil) or gdk_screen_is_composited(scr) then Exit;
+  gtk_rc_parse_string(
+    'style "gotbox-tray" { bg_pixmap[NORMAL] = "<parent>" }' + LineEnding +
+    'widget_class "*GtkTrayIcon*" style "gotbox-tray"');
+end;
 {$ELSE}
 
 procedure RefreshTrayIconTheme;
+begin
+end;
+
+procedure UseParentBackgroundForTray;
 begin
 end;
 {$ENDIF}
@@ -237,7 +270,10 @@ begin
     FAppInd := TryStartAppIndicator;
     {$ENDIF}
     if not FAppInd then
+    begin
+      UseParentBackgroundForTray;
       TrayIcon.Visible := True;
+    end;
     UpdateTrayState;
   except
     on E: Exception do
