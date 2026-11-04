@@ -99,13 +99,15 @@ uses
 
 function RemoteDesktopName: string;
 begin
+  // SysUtils-qualified: on Windows the Windows unit's 3-argument Win32
+  // GetEnvironmentVariable would otherwise shadow it
   // x2go is NX-based but sets its own marker; check it before NoMachine's
-  if GetEnvironmentVariable('X2GO_SESSION') <> '' then Exit('x2go');
-  if GetEnvironmentVariable('XRDP_SESSION') <> '' then Exit('xrdp');
-  if (GetEnvironmentVariable('NXSESSIONID') <> '') or
-    (GetEnvironmentVariable('NX_SESSION_ID') <> '') then Exit('NoMachine');
+  if SysUtils.GetEnvironmentVariable('X2GO_SESSION') <> '' then Exit('x2go');
+  if SysUtils.GetEnvironmentVariable('XRDP_SESSION') <> '' then Exit('xrdp');
+  if (SysUtils.GetEnvironmentVariable('NXSESSIONID') <> '') or
+    (SysUtils.GetEnvironmentVariable('NX_SESSION_ID') <> '') then Exit('NoMachine');
   // TigerVNC/TightVNC's vncserver scripts export VNCDESKTOP to the session
-  if GetEnvironmentVariable('VNCDESKTOP') <> '' then Exit('VNC');
+  if SysUtils.GetEnvironmentVariable('VNCDESKTOP') <> '' then Exit('VNC');
   Result := '';
 end;
 
