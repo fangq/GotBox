@@ -1,11 +1,11 @@
 object ConfigForm: TConfigForm
   Left = 0
-  Height = 530
+  Height = 560
   Top = 0
   Width = 480
   BorderStyle = bsDialog
   Caption = 'GotBox - Settings'
-  ClientHeight = 530
+  ClientHeight = 560
   ClientWidth = 480
   Position = poScreenCenter
   LCLVersion = '4.2.0.0'
@@ -57,31 +57,59 @@ object ConfigForm: TConfigForm
     OnClick = btnAccountClick
     TabOrder = 2
   end
+  object lblTray: TLabel
+    Left = 20
+    Height = 16
+    Top = 138
+    Width = 80
+    Caption = 'Tray icon'
+  end
+  object cbTray: TComboBox
+    Left = 20
+    Height = 28
+    Top = 156
+    Width = 240
+    ItemHeight = 0
+    Items.Strings = (
+      'Automatic'
+      'App indicator (modern panels)'
+      'Classic system tray'
+    )
+    Style = csDropDownList
+    TabOrder = 3
+  end
+  object lblTrayNote: TLabel
+    Left = 270
+    Height = 16
+    Top = 162
+    Width = 190
+    Caption = 'takes effect after a restart'
+  end
   object lblMachine: TLabel
     Left = 20
     Height = 16
-    Top = 186
+    Top = 216
     Width = 100
     Caption = 'Machine name'
   end
   object eMachine: TEdit
     Left = 20
     Height = 28
-    Top = 204
+    Top = 234
     Width = 240
     TabOrder = 4
   end
   object lblCap: TLabel
     Left = 20
     Height = 16
-    Top = 248
+    Top = 278
     Width = 160
     Caption = 'History cap (commits)'
   end
   object seCap: TSpinEdit
     Left = 280
     Height = 28
-    Top = 244
+    Top = 274
     Width = 100
     MaxValue = 50
     MinValue = 20
@@ -91,14 +119,14 @@ object ConfigForm: TConfigForm
   object lblDebounce: TLabel
     Left = 20
     Height = 16
-    Top = 284
+    Top = 314
     Width = 200
     Caption = 'Commit debounce (ms)'
   end
   object seDebounce: TSpinEdit
     Left = 280
     Height = 28
-    Top = 280
+    Top = 310
     Width = 100
     MaxValue = 600000
     MinValue = 500
@@ -108,14 +136,14 @@ object ConfigForm: TConfigForm
   object lblPull: TLabel
     Left = 20
     Height = 16
-    Top = 320
+    Top = 350
     Width = 200
     Caption = 'Pull interval (seconds)'
   end
   object sePull: TSpinEdit
     Left = 280
     Height = 28
-    Top = 316
+    Top = 346
     Width = 100
     MaxValue = 86400
     MinValue = 5
@@ -125,14 +153,14 @@ object ConfigForm: TConfigForm
   object lblGc: TLabel
     Left = 20
     Height = 16
-    Top = 356
+    Top = 386
     Width = 200
     Caption = 'Maintenance every N commits'
   end
   object seGc: TSpinEdit
     Left = 280
     Height = 28
-    Top = 352
+    Top = 382
     Width = 100
     MaxValue = 1000
     MinValue = 1
@@ -142,14 +170,14 @@ object ConfigForm: TConfigForm
   object lblIgnore: TLabel
     Left = 20
     Height = 16
-    Top = 392
+    Top = 422
     Width = 200
     Caption = 'Ignore patterns (one per line)'
   end
   object mIgnore: TMemo
     Left = 20
     Height = 64
-    Top = 410
+    Top = 440
     Width = 440
     ScrollBars = ssAutoVertical
     TabOrder = 9
@@ -157,7 +185,7 @@ object ConfigForm: TConfigForm
   object btnOK: TButton
     Left = 300
     Height = 32
-    Top = 484
+    Top = 514
     Width = 80
     Caption = 'OK'
     Default = True
@@ -167,7 +195,7 @@ object ConfigForm: TConfigForm
   object btnCancel: TButton
     Left = 388
     Height = 32
-    Top = 484
+    Top = 514
     Width = 72
     Cancel = True
     Caption = 'Cancel'

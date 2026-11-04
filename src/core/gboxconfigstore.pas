@@ -32,7 +32,22 @@ const
   { Bumped when config.json grows keys an older build would misread. 2 renamed
     githubUser -> remoteUser when the second and third backends landed. }
   CONFIG_SCHEMA_VERSION = 2;
+
+  { Linux tray icon backend (TGotConfig.TrayStyle). An app-indicator icon only
+    shows if the panel actually renders StatusNotifier items, and an app cannot
+    tell whether it does (an indicator service may accept the item with nothing
+    on the panel to draw it), so the user gets the final say.
+      auto         - app indicator, except the classic tray in a detected remote
+                     desktop (x2go, xrdp, NoMachine, VNC)
+      appindicator - always the app indicator (StatusNotifier over D-Bus)
+      classic      - always the classic XEmbed system tray }
+  TRAY_AUTO = 'auto';
+  TRAY_APPIND = 'appindicator';
+  TRAY_CLASSIC = 'classic';
   GITLAB_DEFAULT_HOST = 'https://gitlab.com';
+
+{ AStyle lowercased if it is one of the TRAY_* values, otherwise TRAY_AUTO. }
+function NormalizeTrayStyle(const AStyle: string): string;
 
 type
   { Cached state for one mapped repo (root subfolder <-> remote repo). }
@@ -65,6 +80,7 @@ type
     GcEveryNCommits: Integer;   // maintenance cadence
     LfsThresholdMB: Integer;    // track files >= this many MB with Git LFS (0 = off)
     RepoVisibility: string;     // "private"
+    TrayStyle: string;          // Linux tray backend: TRAY_AUTO/APPIND/CLASSIC
     IgnoreGlobs: TStringList;
     Repos: TRepoEntryArray;
     constructor Create;
@@ -175,6 +191,13 @@ const
     '*.crdownload'     // partial download (Chrome)
     );
 
+function NormalizeTrayStyle(const AStyle: string): string;
+begin
+  Result := LowerCase(Trim(AStyle));
+  if (Result <> TRAY_APPIND) and (Result <> TRAY_CLASSIC) then
+    Result := TRAY_AUTO;
+end;
+
 procedure AddDefaultIgnoreGlobs(AOut: TStrings);
 var
   i: Integer;
@@ -229,6 +252,7 @@ begin
   // files plain git would otherwise reject (keeps LFS quota use minimal)
   LfsThresholdMB := 95;
   RepoVisibility := 'private';
+  TrayStyle := TRAY_AUTO;
   IgnoreGlobs.Clear;
   AddDefaultIgnoreGlobs(IgnoreGlobs);
   SetLength(Repos, 0);
@@ -308,6 +332,7 @@ begin
       Result.GcEveryNCommits := obj.Get('gcEveryNCommits', Result.GcEveryNCommits);
       Result.LfsThresholdMB := obj.Get('lfsThresholdMB', Result.LfsThresholdMB);
       Result.RepoVisibility := obj.Get('repoVisibility', Result.RepoVisibility);
+      Result.TrayStyle := NormalizeTrayStyle(obj.Get('trayStyle', Result.TrayStyle));
 
       jrepos := obj.Find('ignoreGlobs');
       if jrepos is TJSONArray then
@@ -380,6 +405,7 @@ begin
     obj.Add('gcEveryNCommits', ACfg.GcEveryNCommits);
     obj.Add('lfsThresholdMB', ACfg.LfsThresholdMB);
     obj.Add('repoVisibility', ACfg.RepoVisibility);
+    obj.Add('trayStyle', NormalizeTrayStyle(ACfg.TrayStyle));
 
     globs := TJSONArray.Create;
     for i := 0 to ACfg.IgnoreGlobs.Count - 1 do

@@ -57,15 +57,27 @@ function HandleOverlayRegistration(out AExitCode: Integer): Boolean;
   the GUI's "Enable Explorer overlays" menu action can call it too. }
 function RunOverlayRegistration(AUnregister: Boolean): Integer;
 
-{ Over an x2go/NX session the StatusNotifier (AppIndicator) tray is unusable --
-  the panel can't render its D-Bus menu or resolve its icon, and it delivers no
-  click events. The classic XEmbed systray works there, and LCL switches to it
-  when LAZUSEAPPIND=NO is in the environment. LCL reads that var once at startup
-  and FPC's RTL environment is a startup snapshot (an in-process setenv is NOT
-  seen), so if we detect an x2go session and the var is unset, re-exec ourselves
-  once with it set. No-op off Unix, off x2go, or if the var is already set (which
-  also prevents a re-exec loop). Call FIRST, before the widgetset comes up. }
-procedure MaybeReExecForX2Go;
+{ The remote-desktop session we are running in, from the variables each one sets
+  in the session environment: 'x2go', 'xrdp', 'NoMachine' or 'VNC'; '' for a
+  local (or unrecognised) session. }
+function RemoteDesktopName: string;
+
+{ Pure decision behind the tray backend: True -> the classic XEmbed systray.
+  AStyle is TGotConfig.TrayStyle (TRAY_*), ARemote is RemoteDesktopName. An
+  explicit style wins; 'auto' goes classic only inside a remote desktop, where
+  the StatusNotifier route is commonly broken (the panel can't render the D-Bus
+  menu, or the item lands at an indicator service nothing on the panel draws). }
+function ClassicTrayWanted(const AStyle, ARemote: string): Boolean;
+
+{ LCL picks its own tray backend once, at widgetset start-up, from LAZUSEAPPIND
+  (NO = the classic XEmbed systray), and FPC's RTL environment is a startup
+  snapshot (an in-process setenv is NOT seen). So when the classic tray is wanted
+  -- per the saved Tray icon setting and ClassicTrayWanted -- and the var is
+  unset, re-exec ourselves once with LAZUSEAPPIND=NO. No-op off Linux, when the
+  classic tray isn't wanted, or if the var is already set (which also prevents a
+  re-exec loop, and lets a user-set value win). Call FIRST, before the widgetset
+  comes up. }
+procedure MaybeReExecForClassicTray;
 
 { Detach from the controlling terminal and run in the background (Unix/macOS).
   No-op on Windows. MUST be called at program start -- before the widgetset is
@@ -84,6 +96,28 @@ uses
   Classes, SysUtils, gboxconfigstore
   {$IFDEF UNIX}, BaseUnix, ctypes{$ENDIF}
   {$IFDEF WINDOWS}, Windows, ShellApi{$ENDIF};
+
+function RemoteDesktopName: string;
+begin
+  // x2go is NX-based but sets its own marker; check it before NoMachine's
+  if GetEnvironmentVariable('X2GO_SESSION') <> '' then Exit('x2go');
+  if GetEnvironmentVariable('XRDP_SESSION') <> '' then Exit('xrdp');
+  if (GetEnvironmentVariable('NXSESSIONID') <> '') or
+    (GetEnvironmentVariable('NX_SESSION_ID') <> '') then Exit('NoMachine');
+  // TigerVNC/TightVNC's vncserver scripts export VNCDESKTOP to the session
+  if GetEnvironmentVariable('VNCDESKTOP') <> '' then Exit('VNC');
+  Result := '';
+end;
+
+function ClassicTrayWanted(const AStyle, ARemote: string): Boolean;
+var
+  style: string;
+begin
+  style := NormalizeTrayStyle(AStyle);
+  if style = TRAY_CLASSIC then Exit(True);
+  if style = TRAY_APPIND then Exit(False);
+  Result := ARemote <> '';
+end;
 
 function HasArg(const AShort, ALong: string): Boolean;
 var
@@ -150,16 +184,42 @@ begin
     'GUI-free' + LineEnding + 'daemon instead:  gotboxd [-d]' + LineEnding;
 end;
 
-{$IFDEF UNIX}
-procedure MaybeReExecForX2Go;
+{ The saved Tray icon setting, read straight from config.json: this runs before
+  the app (and its config store) is up. Any problem -> TRAY_AUTO. }
+function SavedTrayStyle: string;
+var
+  store: TConfigStore;
+  cfg: TGotConfig;
+begin
+  Result := TRAY_AUTO;
+  try
+    store := TConfigStore.Create(IncludeTrailingPathDelimiter(GotConfigDir) +
+      'config.json');
+    try
+      cfg := store.Load;
+      try
+        Result := cfg.TrayStyle;
+      finally
+        cfg.Free;
+      end;
+    finally
+      store.Free;
+    end;
+  except
+    Result := TRAY_AUTO;   // unreadable config: the app reports it later
+  end;
+end;
+
+{$IFDEF LINUX}
+procedure MaybeReExecForClassicTray;
 var
   selfPath: RawByteString;   // FileGetSymLinkTarget's out-param type
   args, envs: array of string;
   argv, envp: array of PChar;
   i, ac, ec: Integer;
 begin
-  if GetEnvironmentVariable('X2GO_SESSION') = '' then Exit;      // only over x2go
   if GetEnvironmentVariable('LAZUSEAPPIND') <> '' then Exit;     // set (or re-exec'd)
+  if not ClassicTrayWanted(SavedTrayStyle, RemoteDesktopName) then Exit;
 
   if not FileGetSymLinkTarget('/proc/self/exe', selfPath) then
     selfPath := ParamStr(0);
@@ -187,7 +247,15 @@ begin
   FpExecve(PChar(selfPath), @argv[0], @envp[0]);
   // only returns on failure -> carry on with the default tray backend
 end;
+{$ELSE}
 
+procedure MaybeReExecForClassicTray;
+begin
+  // the AppIndicator-vs-XEmbed tray choice is a Linux concern only
+end;
+{$ENDIF}
+
+{$IFDEF UNIX}
 procedure Daemonize;
 var
   pid: TPid;
@@ -223,11 +291,6 @@ begin
   end;
 end;
 {$ELSE}
-
-procedure MaybeReExecForX2Go;
-begin
-  // x2go/NX + AppIndicator is a Linux concern only.
-end;
 
 procedure Daemonize;
 begin

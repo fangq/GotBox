@@ -28,7 +28,8 @@ program testconfig;
 uses
   SysUtils,
   Classes,
-  gboxconfigstore;
+  gboxconfigstore,
+  gboxdaemon;
 
 var
   failures: Integer = 0;
@@ -98,6 +99,7 @@ begin
       Check(cfg.GitLabHost = GITLAB_DEFAULT_HOST,
         'a missing gitlabHost takes the default');
       Check(cfg.S3Base = '', 'a missing s3Base is empty');
+      Check(cfg.TrayStyle = TRAY_AUTO, 'a missing trayStyle defaults to auto');
 
       // ---- saving upgrades the file but keeps the legacy mirror ----
       cfg.RemoteKind := 'gitlab';
@@ -106,6 +108,7 @@ begin
       cfg.S3Base := 's3://bucket/pre';
       cfg.AwsProfile := 'work';
       cfg.AwsRegion := 'us-east-1';
+      cfg.TrayStyle := TRAY_CLASSIC;
       store.Save(cfg);
     finally
       cfg.Free;
@@ -133,6 +136,7 @@ begin
       Check(cfg.S3Base = 's3://bucket/pre', 's3Base round-trips');
       Check(cfg.AwsProfile = 'work', 'awsProfile round-trips');
       Check(cfg.AwsRegion = 'us-east-1', 'awsRegion round-trips');
+      Check(cfg.TrayStyle = TRAY_CLASSIC, 'trayStyle round-trips');
     finally
       cfg.Free;
     end;
@@ -155,6 +159,31 @@ begin
     store.Free;
   end;
   Check(Pos('"future"', ReadText(path)) > 0, 'and survives a save');
+
+  // ---- trayStyle: case-insensitive; anything unknown falls back to auto ----
+  WriteText(path, '{"trayStyle":"AppIndicator"}');
+  store := TConfigStore.Create(path);
+  try
+    cfg := store.Load;
+    try
+      Check(cfg.TrayStyle = TRAY_APPIND, 'trayStyle is read case-insensitively');
+    finally
+      cfg.Free;
+    end;
+  finally
+    store.Free;
+  end;
+  Check(NormalizeTrayStyle('bogus') = TRAY_AUTO, 'an unknown trayStyle reads as auto');
+  Check(NormalizeTrayStyle(' classic ') = TRAY_CLASSIC, 'trayStyle is trimmed');
+
+  // ---- which tray backend: an explicit setting wins; auto follows the session ----
+  Check(not ClassicTrayWanted(TRAY_AUTO, ''), 'auto + local desktop -> app indicator');
+  Check(ClassicTrayWanted(TRAY_AUTO, 'x2go'), 'auto + x2go -> classic tray');
+  Check(ClassicTrayWanted(TRAY_AUTO, 'xrdp'), 'auto + xrdp -> classic tray');
+  Check(ClassicTrayWanted(TRAY_CLASSIC, ''), 'classic is honoured on a local desktop');
+  Check(not ClassicTrayWanted(TRAY_APPIND, 'x2go'),
+    'app indicator is honoured inside a remote desktop');
+  Check(ClassicTrayWanted('', 'VNC'), 'a blank style behaves as auto');
 
   DeleteFile(path);
   RemoveDir(dir);

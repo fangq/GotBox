@@ -76,6 +76,7 @@ type
     procedure ScaleTick(Sender: TObject);
     procedure IconKickTick(Sender: TObject);
     function TryStartAppIndicator: Boolean;  // direct StatusNotifier tray (stable icon)
+    function ChooseClassicTray: Boolean;     // classic XEmbed tray instead?
     procedure ExportTrayIcons(const ADir: string);
     procedure AppIndAction(AId: PtrInt);     // dispatch appindicator menu clicks
     {$ENDIF}
@@ -266,8 +267,10 @@ begin
     FLastAgg := rsIdle;
     {$IFDEF LINUX}
     // Prefer our own StatusNotifier item (stable named icon that indicator
-    // panels actually render); fall back to LCL's TTrayIcon if unavailable.
-    FAppInd := TryStartAppIndicator;
+    // panels actually render); fall back to LCL's TTrayIcon if unavailable --
+    // unless the classic XEmbed systray is wanted (see ChooseClassicTray).
+    if not ChooseClassicTray then
+      FAppInd := TryStartAppIndicator;
     {$ENDIF}
     if not FAppInd then
     begin
@@ -382,6 +385,33 @@ begin
   end;
 end;
 
+{ Should the tray be the classic XEmbed systray rather than our app indicator?
+  The same decision MaybeReExecForClassicTray made before the widgetset came up
+  (so LCL's own tray backend agrees), plus a user-set LAZUSEAPPIND=NO when the
+  setting is 'auto'. An explicit "App indicator" setting overrides the env var:
+  we drive libayatana-appindicator ourselves, so LCL's choice doesn't matter. }
+function TMainForm.ChooseClassicTray: Boolean;
+var
+  remote, why: string;
+begin
+  remote := RemoteDesktopName;
+  Result := ClassicTrayWanted(FConfig.TrayStyle, remote);
+  if Result then
+  begin
+    if FConfig.TrayStyle = TRAY_CLASSIC then why := 'set in Settings'
+    else
+      why := 'remote desktop: ' + remote;
+  end
+  else if (FConfig.TrayStyle = TRAY_AUTO) and
+    SameText(GetEnvironmentVariable('LAZUSEAPPIND'), 'NO') then
+  begin
+    Result := True;
+    why := 'LAZUSEAPPIND=NO';
+  end;
+  if Result and Assigned(Log) then
+    Log.Info('ui', 'tray via the classic XEmbed systray (' + why + ')');
+end;
+
 { Drive our own StatusNotifier item via libayatana-appindicator, advertising a
   stable icon name from a persistent dir (like Dropbox) so the ayatana indicator
   plugin shows the real GotBox icon instead of a generic fallback. Returns False
@@ -393,7 +423,7 @@ begin
   Result := False;
   if not AppIndAvailable then Exit;
   try
-    dir := IncludeTrailingPathDelimiter(GotDataDir) + 'tray';
+    dir :=IncludeTrailingPathDelimiter(GotDataDir) + 'tray';
     ForceDirectories(dir);
     ExportTrayIcons(dir);
     AppIndBegin('gotbox', 'gotbox-' + StateKey(rsIdle), dir, @AppIndAction);

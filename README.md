@@ -362,6 +362,7 @@ Key options (defaults in brackets):
 | **History cap** | Keep about this many recent commits per repo (20–50). [30] |
 | **Commit debounce** | Wait this long (ms) of quiet after the last save before committing (batches a burst of saves into one commit). [10000] |
 | **Pull interval** | How often (s) to check for remote changes. A cheap `ls-remote` check runs each interval; a full fetch/merge only when the remote actually moved. [15] |
+| **Tray icon** (Linux) | **Automatic** uses an app indicator, or the classic system tray inside a remote desktop (x2go, xrdp, NoMachine, VNC). Choose **App indicator** or **Classic system tray** if the icon doesn't show; takes effect after a restart. [Automatic] |
 | **GC every N commits** | Run git maintenance after this many commits. [25] |
 | **LFS threshold (MB)** | Auto-track files at/above this size with Git LFS; `0` disables. [95] |
 
@@ -512,6 +513,11 @@ managing unless you pass `--takeover` (the GUI, by contrast, asks).
   **`--takeover`**. A crashed instance's claim is reclaimed automatically after
   ~90 s. The intended setup is still one **local** copy per machine synced via
   the remote — not two machines sharing one working tree.
+- **No tray icon at all (Linux)** — the panel may not display app-indicator
+  icons (for example, an indicator service accepts them but no Indicator plugin
+  is on the panel). Set **Settings… → Tray icon** to **Classic system tray** and
+  restart GotBox, or add your desktop's indicator plugin to the panel. If the
+  tray menu won't open, run `gotbox --status` to reach the Status window.
 - **Tray icon looks like a generic gear (Linux, StatusNotifier panels)** — some
   desktops can't render the dynamically drawn icon. Installing via the `.deb`
   (which registers a themed icon) helps; otherwise the colored square shows on

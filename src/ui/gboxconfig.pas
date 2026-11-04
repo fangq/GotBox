@@ -36,6 +36,9 @@ type
     lblKind: TLabel;
     lblBackend: TLabel;
     btnAccount: TButton;
+    lblTray: TLabel;
+    cbTray: TComboBox;
+    lblTrayNote: TLabel;
     lblMachine: TLabel;
     eMachine: TEdit;
     lblCap: TLabel;
@@ -69,6 +72,19 @@ var
 implementation
 
 {$R *.lfm}
+
+const
+  { cbTray item order -> TGotConfig.TrayStyle }
+  TRAY_STYLES: array[0..2] of string = (TRAY_AUTO, TRAY_APPIND, TRAY_CLASSIC);
+
+function TrayStyleIndex(const AStyle: string): Integer;
+var
+  i: Integer;
+begin
+  for i := Low(TRAY_STYLES) to High(TRAY_STYLES) do
+    if TRAY_STYLES[i] = NormalizeTrayStyle(AStyle) then Exit(i);
+  Result := 0;
+end;
 
 procedure TConfigForm.btnAccountClick(Sender: TObject);
 begin
@@ -114,6 +130,13 @@ begin
   sePull.Value := ACfg.PullIntervalSec;
   seGc.Value := ACfg.GcEveryNCommits;
   mIgnore.Lines.Assign(ACfg.IgnoreGlobs);
+  cbTray.ItemIndex := TrayStyleIndex(ACfg.TrayStyle);
+  {$IFNDEF LINUX}
+  // the app-indicator / XEmbed choice exists only on Linux
+  lblTray.Visible := False;
+  cbTray.Visible := False;
+  lblTrayNote.Visible := False;
+  {$ENDIF}
 
   CenterForm(Self);
   Result := ShowModal = mrOK;
@@ -127,6 +150,8 @@ begin
   ACfg.PullIntervalSec := sePull.Value;
   ACfg.GcEveryNCommits := seGc.Value;
   ACfg.IgnoreGlobs.Assign(mIgnore.Lines);
+  if cbTray.ItemIndex >= 0 then
+    ACfg.TrayStyle := TRAY_STYLES[cbTray.ItemIndex];
 end;
 
 end.

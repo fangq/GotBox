@@ -64,10 +64,11 @@ begin
   // starting the tray app. No-op unless --(un)register-overlays was passed.
   if HandleOverlayRegistration(ovlExit) then
     Halt(ovlExit);
-  // Over an x2go/NX session, re-exec with LAZUSEAPPIND=NO so LCL uses the classic
-  // XEmbed systray (the AppIndicator tray is unusable there). Must run before the
-  // widgetset comes up; no-op off x2go. See MaybeReExecForX2Go.
-  MaybeReExecForX2Go;
+  // When the classic XEmbed systray is wanted (the Tray icon setting, or 'auto'
+  // inside a remote desktop such as x2go), re-exec with LAZUSEAPPIND=NO so LCL
+  // uses it. Must run before the widgetset comes up. See
+  // MaybeReExecForClassicTray.
+  MaybeReExecForClassicTray;
   // Detach into the background before the widgetset/threads come up (no-op
   // without -d, and on Windows). Forking later would be unsafe.
   if WantDaemon then
