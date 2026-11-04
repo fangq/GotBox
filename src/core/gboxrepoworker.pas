@@ -46,6 +46,21 @@ type
   the escalation is unit-testable. }
 function BackoffDelayMs(AStreak, ABaseMs, AMaxMs: Integer): Integer;
 
+const
+  { Adaptive sync-down: right after this repo moved data (a local edit, a push
+    or a pull), more changes tend to follow -- the same user editing on another
+    machine, a batch of files copied in one go -- so the remote is probed every
+    HOT_POLL_MS for HOT_WINDOW_MS instead of waiting a full pull interval. Each
+    probe is one ls-remote, so a hot repo costs a git spawn every few seconds
+    for a few minutes, and an idle one costs nothing extra. }
+  HOT_POLL_MS = 5000;
+  HOT_WINDOW_MS = 600000;
+
+{ The periodic remote-probe interval: ABaseMs (the configured pull interval),
+  shortened to HOT_POLL_MS while AHot, but never below AMinMs (the backend's
+  floor). 0 (periodic sync-down disabled) stays 0. Pure, so unit-testable. }
+function EffectivePollMs(ABaseMs, AMinMs: Integer; AHot: Boolean): Integer;
+
 type
   { Fired (on the worker thread) at the end of every sync cycle, with this
     repo's working-tree path, so the owner can invalidate a per-file status
@@ -63,6 +78,8 @@ type
     FDebounceMs: Integer;
     FGcEvery: Integer;
     FPullIntervalMs: Integer;
+    FMinPollMs: Integer;        // the backend's poll floor (MinPollIntervalSec)
+    FHotUntil: TDateTime;       // probe at HOT_POLL_MS until then (worker thread only)
     FHistoryCap: Integer;
     FLfsThresholdMB: Integer;
     FKind: TBackendKind;        // which storage backend this repo lives on
@@ -145,6 +162,14 @@ begin
   if Result > AMaxMs then Result := AMaxMs;
 end;
 
+function EffectivePollMs(ABaseMs, AMinMs: Integer; AHot: Boolean): Integer;
+begin
+  Result := ABaseMs;
+  if Result <= 0 then Exit(0);
+  if AHot and (HOT_POLL_MS < Result) then Result := HOT_POLL_MS;
+  if Result < AMinMs then Result := AMinMs;
+end;
+
 { Build a notification for the files synced this cycle: list up to 3 names,
   otherwise just the count. Submodule files are prefixed with the repo name. }
 procedure TRepoWorker.BuildNotice(AFiles: TStrings; out ATitle, ABody: string);
@@ -190,6 +215,7 @@ begin
   FDebounceMs := ADebounceMs;
   FGcEvery := AGcEvery;
   FPullIntervalMs := APullIntervalSec * 1000;
+  FMinPollMs := MinPollIntervalSec(bkGitHub) * 1000;   // SetBackend overrides
   FHistoryCap := AHistoryCap;
   FLfsThresholdMB := ALfsThresholdMB;
   FKind := bkGitHub;                       // SetBackend overrides; this is the
@@ -233,6 +259,7 @@ begin
   // going through a remote helper costs an interpreter start per probe, so a
   // 15 s poll would spawn a process every few seconds forever
   minMs := MinPollIntervalSec(AKind) * 1000;
+  FMinPollMs := minMs;   // also bounds the faster "hot" polling
   if FPullIntervalMs < minMs then
   begin
     FPullIntervalMs := minMs;
@@ -626,6 +653,11 @@ begin
     else
       FSyncedRemoteSha := '';
 
+    // data moved in either direction: more is likely on its way, so probe the
+    // remote fast for a while (see HOT_POLL_MS)
+    if outcome in [soPushed, soPulled, soMerged, soReset, soConflict] then
+      FHotUntil := IncMilliSecond(Now, HOT_WINDOW_MS);
+
     // a pull into the root may have added/removed submodules (.gitmodules
     // changed elsewhere) -- let the engine re-scan and reconcile its workers
     if (FName = GOTBOX_REPO) and (outcome in [soPulled, soMerged, soReset]) and
@@ -706,9 +738,13 @@ begin
         begin
           FDirty := False;
           active := True;
+          // the user is working in this folder: a collaborator/other machine may
+          // be too, so watch the remote closely for a while
+          FHotUntil := IncMilliSecond(Now, HOT_WINDOW_MS);
         end
         else if (FPullIntervalMs > 0) and
-          (MilliSecondsBetween(Now, FLastCycle) >= FPullIntervalMs) then
+          (MilliSecondsBetween(Now, FLastCycle) >=
+          EffectivePollMs(FPullIntervalMs, FMinPollMs, Now < FHotUntil)) then
           periodic := True;
       finally
         FLock.Leave;

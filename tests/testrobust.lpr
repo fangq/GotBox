@@ -614,6 +614,14 @@ begin
     'B1: backoff grows with the streak');
   Check(BackoffDelayMs(99, 15000, 300000) = 300000, 'B1: backoff caps at the max');
 
+  // B2: adaptive poll interval -- fast while hot, never below the backend floor
+  Check(EffectivePollMs(60000, 1000, False) = 60000, 'B2: idle uses the pull interval');
+  Check(EffectivePollMs(60000, 1000, True) = HOT_POLL_MS, 'B2: hot polls fast');
+  Check(EffectivePollMs(2000, 1000, True) = 2000,
+    'B2: hot never slows a shorter configured interval');
+  Check(EffectivePollMs(60000, 60000, True) = 60000, 'B2: hot respects backend floor');
+  Check(EffectivePollMs(0, 1000, True) = 0, 'B2: disabled sync-down stays disabled');
+
   // B3: corruption-signature classifier
   Check(IsCorruptionError('error: object file .git/objects/ab/cd is empty'),
     'B3: empty object file flagged');
