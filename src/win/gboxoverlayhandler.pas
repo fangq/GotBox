@@ -140,6 +140,17 @@ begin
     (CompareByte(a.D4, b.D4, 8) = 0);
 end;
 
+{ A code address inside this DLL, for GetModuleHandleEx(FROM_ADDRESS). It must
+  be a separate routine: inside GetSelfPathW, FPC reads "GetSelfPathW" as that
+  function's RESULT variable, so @GetSelfPathW was the address of a string on
+  the stack. The lookup then failed, the handle stayed 0, and
+  GetModuleFileNameW(0) returned the HOST process -- regsvr32.exe when
+  registering (written to InprocServer32, so Explorer never loaded the
+  handler) and explorer.exe when Explorer asked for the overlay icon. }
+procedure SelfAnchor;
+begin
+end;
+
 { This DLL's own file path (for InprocServer32 and the overlay icon source). }
 function GetSelfPathW: WideString;
 var
@@ -147,9 +158,10 @@ var
   n: DWORD;
 begin
   if gSelfModule = 0 then
-    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS or
+    if not GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS or
       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-      PWideChar(@GetSelfPathW), gSelfModule);
+      PWideChar(Pointer(@SelfAnchor)), gSelfModule) then
+      gSelfModule := HInstance;   // the DLL's own handle, never the host's
   n := GetModuleFileNameW(gSelfModule, @buf[0], Length(buf));
   SetString(Result, PWideChar(@buf[0]), n);
 end;
@@ -344,6 +356,10 @@ var
 begin
   clsidStr := GUIDToString(AClsid);
   self := string(GetSelfPathW);
+  // never register anything but this DLL as the handler: a wrong path (e.g.
+  // the host regsvr32.exe) is accepted silently and Explorer just shows no
+  // overlays, so fail the registration where regsvr32 reports it instead
+  if not SameText(ExtractFileExt(self), '.dll') then Exit(False);
   Result :=
     RegSetSz(HKEY_CLASSES_ROOT, 'CLSID\' + clsidStr, '', AFriendly) and
     RegSetSz(HKEY_CLASSES_ROOT, 'CLSID\' + clsidStr + '\InprocServer32', '', self) and
