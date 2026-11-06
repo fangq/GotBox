@@ -370,15 +370,40 @@ begin
     RegSetSz(HKEY_CLASSES_ROOT, 'CLSID\' + clsidStr + '\InprocServer32', '', self) and
     RegSetSz(HKEY_CLASSES_ROOT, 'CLSID\' + clsidStr + '\InprocServer32',
     'ThreadingModel', 'Apartment') and
-    // leading spaces raise our alphabetical priority against the ~15-slot limit
+    // leading spaces raise our alphabetical priority (see OVL_NAME_* below)
     RegSetSz(HKEY_LOCAL_MACHINE, SHELLOVERLAY_KEY + '\' + AName, '', clsidStr);
+end;
+
+const
+  { Explorer loads only the first 15 ShellIconOverlayIdentifiers in name order,
+    and Windows reserves 4 of those, so only ~11 third-party handlers ever
+    run -- the rest are silently ignored. Sync clients compete with leading
+    spaces (OneDrive registers 7 with four), so GotBox uses five to sort ahead
+    of them, and numbers its entries so that if slots still run short the most
+    common badge (synced) is the one kept. }
+  OVL_NAME_SYNCED = '     GotBox1Synced';
+  OVL_NAME_MODIFIED = '     GotBox2Modified';
+  OVL_NAME_CONFLICT = '     GotBox3Conflict';
+  { names used before 2026-11: two spaces, which sorted after OneDrive's and
+    left GotBox past the 11th slot. Removed on (re)registration. }
+  OVL_LEGACY_NAMES: array[0..2] of string = ('  GotBoxSynced', '  GotBoxModified',
+    '  GotBoxConflict');
+
+procedure DeleteLegacyOverlayNames;
+var
+  i: Integer;
+begin
+  for i := Low(OVL_LEGACY_NAMES) to High(OVL_LEGACY_NAMES) do
+    RegDeleteKeyA(HKEY_LOCAL_MACHINE, PChar(SHELLOVERLAY_KEY + '\' +
+      OVL_LEGACY_NAMES[i]));
 end;
 
 function RegisterOverlays: HRESULT;
 begin
-  if RegisterOne(CLSID_Synced, '  GotBoxSynced', 'GotBox synced') and
-    RegisterOne(CLSID_Modified, '  GotBoxModified', 'GotBox modified') and
-    RegisterOne(CLSID_Conflict, '  GotBoxConflict', 'GotBox conflict') then
+  DeleteLegacyOverlayNames;
+  if RegisterOne(CLSID_Synced, OVL_NAME_SYNCED, 'GotBox synced') and
+    RegisterOne(CLSID_Modified, OVL_NAME_MODIFIED, 'GotBox modified') and
+    RegisterOne(CLSID_Conflict, OVL_NAME_CONFLICT, 'GotBox conflict') then
     Result := S_OK
   else
     Result := E_FAIL;
@@ -396,9 +421,10 @@ end;
 
 function UnregisterOverlays: HRESULT;
 begin
-  UnregisterOne(CLSID_Synced, '  GotBoxSynced');
-  UnregisterOne(CLSID_Modified, '  GotBoxModified');
-  UnregisterOne(CLSID_Conflict, '  GotBoxConflict');
+  UnregisterOne(CLSID_Synced, OVL_NAME_SYNCED);
+  UnregisterOne(CLSID_Modified, OVL_NAME_MODIFIED);
+  UnregisterOne(CLSID_Conflict, OVL_NAME_CONFLICT);
+  DeleteLegacyOverlayNames;
   Result := S_OK;
 end;
 

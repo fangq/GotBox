@@ -298,10 +298,12 @@ Then **restart Explorer** (sign out/in, or restart `explorer.exe`) for the
 badges to show. To turn them off, run `gotbox --unregister-overlays`
 (uninstalling GotBox does this automatically).
 
-> **Note:** Windows allows only ~15 overlay handlers total across all apps, in
-> alphabetical priority. GotBox registers its three with leading spaces to rank
-> high, but if you run many overlay providers
-> some may not get a slot — a Windows limitation, not a GotBox bug.
+> **Note:** Explorer loads only the first 15 overlay handlers across all apps,
+> in alphabetical order, and Windows keeps 4 of those for itself, so only about
+> 11 third-party handlers ever show. GotBox registers its three with five
+> leading spaces to rank ahead of OneDrive's, synced first. If badges still
+> don't appear, another app may rank even higher: check the list under
+> `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers`.
 
 ### Finder icon overlays (macOS)
 
