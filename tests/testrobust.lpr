@@ -633,6 +633,32 @@ begin
   Check(not IsCorruptionError('merge failed: conflict in file.txt'),
     'B3: a merge conflict is NOT flagged as corruption');
 
+  // auth-failure classifier: must not be folded into "offline" (it never
+  // clears on its own; see gboxsync.IsAuthFailure)
+  Check(IsAuthFailure('fatal: could not read Password for ' +
+    '''https://fangq@github.com'': terminal prompts disabled'),
+    'auth: could-not-read-password flagged');
+  Check(IsAuthFailure('error: unable to read askpass response from ' +
+    '''C:\Temp\gotbox-askpass.cmd'''), 'auth: askpass failure flagged');
+  Check(IsAuthFailure('remote: Invalid username or password.' + LineEnding +
+    'fatal: Authentication failed for ''https://github.com/x/y.git/'''),
+    'auth: rejected credentials flagged');
+  Check(not IsAuthFailure('fatal: could not resolve host github.com'),
+    'auth: a DNS failure is NOT flagged as an auth failure');
+  Check(not IsAuthFailure('fatal: the remote end hung up unexpectedly'),
+    'auth: an unrelated fetch failure is NOT flagged as an auth failure');
+
+  // access-denied classifier: the credential works but may not use this repo
+  Check(IsAccessDenied('remote: Write access to repository not granted.' +
+    LineEnding + 'fatal: unable to access ''https://github.com/fangq/.gotbox.git/'': ' +
+    'The requested URL returned error: 403'), 'access: app not granted the repo');
+  Check(IsAccessDenied('remote: Permission to fangq/x.git denied to someone.'),
+    'access: permission denied to another user');
+  Check(not IsAuthFailure('remote: Write access to repository not granted.'),
+    'access: a working-but-unauthorized token is NOT an auth failure');
+  Check(not IsAccessDenied('fatal: could not resolve host github.com'),
+    'access: a DNS failure is NOT access denied');
+
   WriteLn;
   if failures = 0 then WriteLn('ALL TESTS PASSED')
   else

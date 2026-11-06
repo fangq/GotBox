@@ -46,6 +46,22 @@ type
 
 function SyncOutcomeText(AOutcome: TSyncOutcome): string;
 
+{ True if AText (git stderr) is git rejecting or failing to obtain credentials
+  -- an expired/revoked token, or (seen in the wild on some Windows git builds)
+  a GIT_ASKPASS helper that could not be run at all. This must NOT be folded
+  into the "offline" bucket: an auth failure never clears on its own, so
+  misfiling it as offline leaves the repo silently retrying forever while the
+  UI claims a transient network problem instead of "sign in again". }
+function IsAuthFailure(const AText: string): Boolean;
+
+{ True if AText (git stderr) says the credential WORKS but is not allowed to
+  use this repository -- e.g. a GitHub App sign-in whose app is not installed
+  on the repo ("Write access to repository not granted"), or a token without
+  access to it. Persistent like IsAuthFailure, but signing in again does not
+  help: the access has to be granted on the server, so it gets its own message.
+  Check IsAuthFailure first; a rejected credential can also come with a 403. }
+function IsAccessDenied(const AText: string): Boolean;
+
 { True if AText (git stderr / a cycle detail) looks like local repository
   corruption -- a damaged object store that a normal cycle can't fix by itself
   (it needs re-cloning). Used to give the user an actionable state instead of
@@ -101,6 +117,33 @@ end;
 function CommitMsg(const AMachine: string): string;
 begin
   Result := Format('%s %s', [AMachine, FormatDateTime('yyyy-mm-dd hh:nn:ss', Now)]);
+end;
+
+function IsAuthFailure(const AText: string): Boolean;
+var
+  s: string;
+begin
+  s := LowerCase(AText);
+  Result := (Pos('could not read username', s) > 0) or
+    (Pos('could not read password', s) > 0) or
+    (Pos('terminal prompts disabled', s) > 0) or
+    (Pos('unable to read askpass response', s) > 0) or
+    (Pos('authentication failed', s) > 0) or
+    (Pos('invalid username or password', s) > 0) or
+    (Pos('invalid username or token', s) > 0) or
+    (Pos('bad credentials', s) > 0) or
+    (Pos('support for password authentication was removed', s) > 0);
+end;
+
+function IsAccessDenied(const AText: string): Boolean;
+var
+  s: string;
+begin
+  s := LowerCase(AText);
+  Result := (Pos('write access to repository not granted', s) > 0) or
+    (Pos('resource not accessible by integration', s) > 0) or
+    ((Pos('permission to ', s) > 0) and (Pos(' denied to ', s) > 0)) or
+    (Pos('the requested url returned error: 403', s) > 0);
 end;
 
 function IsCorruptionError(const AText: string): Boolean;
@@ -433,6 +476,22 @@ begin
       ADetail := 'remote not found (deleted or no access): ' + fetchErr;
       Exit(soError);
     end
+    else if IsAuthFailure(fetchErr) then
+    begin
+      // persistent: the stored credential is rejected or unusable. Never clears
+      // on its own, so it must not be filed as "offline" (which retries forever
+      // and tells the user nothing is actually wrong but the network).
+      ADetail := 'sign-in required (authentication failed): ' + fetchErr;
+      Exit(soError);
+    end
+    else if IsAccessDenied(fetchErr) then
+    begin
+      // persistent too, but signing in again won't fix it: the server has to
+      // grant this credential access to the repo
+      ADetail := 'no access to this repository (on GitHub, give the GotBox ' +
+        'app access to it under Settings > Applications): ' + fetchErr;
+      Exit(soError);
+    end
     else if (Pos('could not resolve', LowerCase(fetchErr)) > 0) or
       (Pos('could not read', LowerCase(fetchErr)) > 0) or
       (Pos('connection', LowerCase(fetchErr)) > 0) or
@@ -609,6 +668,19 @@ begin
       (Pos('does not exist', LowerCase(fetchErr)) > 0) then
     begin
       ADetail := 'remote not found (deleted or no access): ' + fetchErr;
+      Exit(soError);
+    end
+    else if IsAuthFailure(fetchErr) then
+    begin
+      ADetail := 'sign-in required (authentication failed): ' + fetchErr;
+      Exit(soError);
+    end
+    else if IsAccessDenied(fetchErr) then
+    begin
+      // persistent too, but signing in again won't fix it: the server has to
+      // grant this credential access to the repo
+      ADetail := 'no access to this repository (on GitHub, give the GotBox ' +
+        'app access to it under Settings > Applications): ' + fetchErr;
       Exit(soError);
     end
     else if (Pos('could not resolve', LowerCase(fetchErr)) > 0) or
