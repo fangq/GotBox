@@ -1478,8 +1478,15 @@ begin
 
   FStore.Save(FConfig);
   Log.Info('ui', 'Account updated: ' + after);
-  // the engine is pointed at the old remote; let it be rebuilt
-  if (after <> before) and Assigned(FEngine) and FEngine.Running then StopEngine;
+  // Rebuild the engine whenever the account was (re)applied, not only when the
+  // summary changed: each worker holds the token it was created with, so a fresh
+  // sign-in as the SAME user (e.g. to replace a token GitHub now rejects) would
+  // otherwise leave every worker on the old token until GotBox restarts.
+  // StartEngine stops the old engine first and comes back up with the stored
+  // token (or stays down if the account no longer works). Done here rather
+  // than left to TryBootstrap, which is skipped when Settings opened us -- and
+  // cancelling Settings would then leave sync stopped.
+  if Assigned(FEngine) and FEngine.Running then StartEngine;
   // clear the "Not signed in" hint set by MaybePromptLogin; the engine's first
   // status change will overwrite it, but reset here in case it settles unchanged
   if Assigned(FStatusItem) then FStatusItem.Caption := 'Status: starting...';
