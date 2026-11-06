@@ -100,6 +100,17 @@ def render_badge(n, kind):
     return img
 
 
+def corner_badge(badge, frac=0.56):
+    """Windows Explorer scales an overlay icon to the full size of the item icon
+    it decorates, so the overlay must be a transparent canvas with the badge in
+    the bottom-left corner -- a full-canvas disc would cover the file icon."""
+    n = badge.size[0]
+    b = int(round(n * frac))
+    img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    img.paste(badge.resize((b, b), Image.LANCZOS), (0, n - b))
+    return img
+
+
 def _dib(img):
     """Uncompressed 32-bit BGRA DIB for one ICO entry (XOR data + empty AND mask).
     Pillow stores ICO entries as PNG, which LCL's icon reader rejects ('Bitmap
@@ -161,7 +172,7 @@ def main():
         badge = render_badge(MASTER, kind)
         # Windows Explorer overlay DLL wants .ico
         write_ico(os.path.join(ASSETS, f"overlay-{kind}.ico"),
-                  badge, [16, 20, 24, 32, 48])
+                  corner_badge(badge), [16, 20, 24, 32, 48, 64, 96, 128, 256])
         # macOS Finder Sync extension wants an NSImage-loadable .png
         badge.resize((128, 128), Image.LANCZOS).save(
             os.path.join(ASSETS, f"overlay-{kind}.png"))
