@@ -37,7 +37,7 @@ unit gboxfilestatus;
 interface
 
 uses
-  Classes, SysUtils, SyncObjs, gboxgitrunner;
+  Classes, SysUtils, SyncObjs, gboxgitrunner, gboxsuper;
 
 type
   { fsNone = outside a managed repo, ignored, or unknown -> no overlay. Ordered
@@ -51,13 +51,18 @@ type
   private
     FDir: string;              // repo working-tree directory (native separators)
     FMap: TStringList;         // key = repo-relative '/'-path; Objects = state+1
-    FStamp: QWord;             // last refresh (GetTickCount64); 0 = never
+    FStamp: QWord;             // last refresh (GetTickCount64); 0 = stale
+    FHasData: Boolean;         // refreshed at least once (FMap is usable)
+    FRefreshing: Boolean;      // a refresh is running outside the lock
+    FGen: Cardinal;            // bumped by Invalidate (see TStatusCache.Lookup)
     procedure PutMax(const ARel: string; AState: TFileState);
     procedure RollUp(const ARel: string; AState: TFileState);
   public
     constructor Create(const ADir: string);
     destructor Destroy; override;
     procedure Refresh;                       // re-run git and rebuild the map
+    { Take over AOther's freshly built map and stamp (AOther is left empty). }
+    procedure AdoptFrom(AOther: TRepoStatusCache);
     function LookupRel(const ARel: string): TFileState;
     property Stamp: QWord read FStamp write FStamp;
   end;
@@ -68,6 +73,8 @@ type
     FLock: TCriticalSection;
     FTtlMs: Integer;
     FRepos: TStringList;       // key = repo dir; Objects = TRepoStatusCache
+    FSubs: TSubmoduleArray;    // cached ListSubmodules(FRootDir)
+    FSubsStamp: QWord;         // when FSubs was read; 0 = never
     function RepoCacheFor(const ARepoDir: string): TRepoStatusCache;
     function OwningRepo(const AAbsPath: string; out ARelInRepo: string): string;
   public
@@ -92,8 +99,11 @@ function NormRel(const APath: string): string;
 
 implementation
 
-uses
-  gboxsuper;
+const
+  { ListSubmodules runs git; re-reading it on every overlay query made each
+    lookup cost a process spawn (and held the lock while doing it). Submodules
+    change rarely -- a few seconds of staleness is harmless. }
+  SUBS_TTL_MS = 5000;
 
 function StateSeverity(AState: TFileState): Integer;
 begin
@@ -147,6 +157,9 @@ begin
   FMap.Sorted := True;
   FMap.Duplicates := dupIgnore;
   FStamp := 0;
+  FHasData := False;
+  FRefreshing := False;
+  FGen := 0;
 end;
 
 destructor TRepoStatusCache.Destroy;
@@ -223,6 +236,7 @@ begin
     if not IsGitWorkTree(FDir) then
     begin
       FStamp := GetTickCount64;
+      FHasData := True;
       Exit;
     end;
 
@@ -263,10 +277,23 @@ begin
     end;
 
     FStamp := GetTickCount64;
+    FHasData := True;
   finally
     recs.Free;
     git.Free;
   end;
+end;
+
+procedure TRepoStatusCache.AdoptFrom(AOther: TRepoStatusCache);
+var
+  tmp: TStringList;
+begin
+  tmp := FMap;
+  FMap := AOther.FMap;
+  AOther.FMap := tmp;
+  AOther.FMap.Clear;
+  FStamp := AOther.FStamp;
+  FHasData := True;
 end;
 
 function TRepoStatusCache.LookupRel(const ARel: string): TFileState;
@@ -325,7 +352,12 @@ begin
   relRoot := NormRel(Copy(absN, Length(rootN) + 1, MaxInt));   // path under root
 
   best := '';                       // deepest submodule local name matched
-  subs := ListSubmodules(FRootDir);
+  if (FSubsStamp = 0) or (GetTickCount64 - FSubsStamp >= SUBS_TTL_MS) then
+  begin
+    FSubs := ListSubmodules(FRootDir);
+    FSubsStamp := GetTickCount64;
+  end;
+  subs := FSubs;
   for i := 0 to High(subs) do
   begin
     subRel := NormRel(subs[i].LocalName);
@@ -360,12 +392,24 @@ begin
   end;
 end;
 
+{ Stale-while-revalidate. Rebuilding a repo's map runs git (seconds on a big
+  repo on Windows), and doing that under FLock stalled every concurrent overlay
+  query behind it. Only a repo with NO data yet is refreshed synchronously;
+  otherwise one caller rebuilds a fresh map outside the lock and answers from
+  it, while concurrent callers keep answering from the previous map instead of
+  waiting. An Invalidate during that
+  rebuild bumps FGen, so the swapped-in map stays stale and is rebuilt again. }
 function TStatusCache.Lookup(const AAbsPath: string): TFileState;
 var
   repoDir, relInRepo: string;
   rc: TRepoStatusCache;
+  fresh: TRepoStatusCache;
+  gen: Cardinal;
+  background: Boolean;
 begin
   Result := fsNone;
+  background := False;
+  gen := 0;
   FLock.Enter;
   try
     repoDir := OwningRepo(AAbsPath, relInRepo);
@@ -375,10 +419,45 @@ begin
     // has ~15ms granularity, so two lookups in the same tick would otherwise
     // reuse a stale cache (the source of the flaky untracked-overlay result).
     if (rc.Stamp = 0) or (GetTickCount64 - rc.Stamp >= QWord(FTtlMs)) then
-      rc.Refresh;
+    begin
+      if not rc.FHasData then
+        rc.Refresh                       // nothing to serve yet: must wait
+      else if not rc.FRefreshing then
+      begin
+        rc.FRefreshing := True;          // this caller rebuilds it, below
+        gen := rc.FGen;
+        background := True;
+      end;
+    end;
     Result := rc.LookupRel(relInRepo);
   finally
     FLock.Leave;
+  end;
+  if not background then Exit;
+
+  fresh := TRepoStatusCache.Create(repoDir);
+  try
+    try
+      fresh.Refresh;
+    except
+      // keep serving the old map; the next lookup retries
+    end;
+    FLock.Enter;
+    try
+      // FRepos never drops entries, so rc is still the live cache object
+      if fresh.FHasData then
+      begin
+        rc.AdoptFrom(fresh);
+        if rc.FGen <> gen then rc.Stamp := 0;   // invalidated meanwhile
+      end;
+      // this caller waited for the rebuild anyway: answer from the new map
+      Result := rc.LookupRel(relInRepo);
+      rc.FRefreshing := False;
+    finally
+      FLock.Leave;
+    end;
+  finally
+    fresh.Free;
   end;
 end;
 
@@ -391,12 +470,23 @@ begin
     if ARepoDir = '' then
     begin
       for i := 0 to FRepos.Count - 1 do
+      begin
         TRepoStatusCache(FRepos.Objects[i]).Stamp := 0;
+        Inc(TRepoStatusCache(FRepos.Objects[i]).FGen);
+      end;
+      FSubsStamp := 0;     // a sync may have added/removed submodules
     end
     else
     begin
       i := FRepos.IndexOf(ExcludeTrailingPathDelimiter(ARepoDir));
-      if i >= 0 then TRepoStatusCache(FRepos.Objects[i]).Stamp := 0;
+      if i >= 0 then
+      begin
+        TRepoStatusCache(FRepos.Objects[i]).Stamp := 0;
+        Inc(TRepoStatusCache(FRepos.Objects[i]).FGen);
+      end;
+      // the root's sync is what adds/removes submodules
+      if PathEq(ExcludeTrailingPathDelimiter(ARepoDir), FRootDir) then
+        FSubsStamp := 0;
     end;
   finally
     FLock.Leave;

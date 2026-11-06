@@ -46,7 +46,7 @@ function UnregisterOverlays: HRESULT;
 implementation
 
 uses
-  SysUtils, gboxfilestatus, gboxoverlayipc;
+  SysUtils, Classes, gboxfilestatus, gboxoverlayipc, gboxconfigstore;
 
 const
   S_OK = HRESULT(0);
@@ -235,6 +235,113 @@ begin
   Result := S_OK;
 end;
 
+{ ---- per-process query cache ----
+
+  Explorer asks EACH of the three handlers about every item it paints, from
+  several threads, and also for folders that have nothing to do with GotBox.
+  Each question used to be its own pipe round trip. Now:
+    - paths outside the GotBox root (read from config.json, re-read every
+      ROOT_TTL_MS) are answered "no" without any IPC;
+    - one answer per path is cached for STATE_TTL_MS and shared by the three
+      handlers, so a file costs one round trip instead of three. }
+const
+  STATE_TTL_MS = 3000;
+  ROOT_TTL_MS = 30000;
+  CACHE_MAX = 8192;          // cleared wholesale past this; refills cheaply
+
+type
+  TCachedState = class
+    State: TFileState;
+    Tick: QWord;
+  end;
+
+var
+  gCacheLock: TRTLCriticalSection;
+  gCache: TStringList = nil;   // path -> TCachedState (case-insensitive)
+  gRoot: string = '';
+  gRootStamp: QWord = 0;
+
+{ The configured GotBox root ('' if unknown). Call with gCacheLock held. }
+function CachedRoot: string;
+var
+  store: TConfigStore;
+  cfg: TGotConfig;
+begin
+  if (gRootStamp = 0) or (GetTickCount64 - gRootStamp >= ROOT_TTL_MS) then
+  begin
+    gRootStamp := GetTickCount64;
+    gRoot := '';
+    try
+      store := TConfigStore.Create(IncludeTrailingPathDelimiter(
+        SysUtils.GetEnvironmentVariable('APPDATA')) + 'gotbox\config.json');
+      try
+        cfg := store.Load;
+        try
+          gRoot := ExcludeTrailingPathDelimiter(cfg.RootDir);
+        finally
+          cfg.Free;
+        end;
+      finally
+        store.Free;
+      end;
+    except
+      gRoot := '';        // unreadable: fall back to asking about everything
+    end;
+  end;
+  Result := gRoot;
+end;
+
+{ APath is ARoot or inside it (case-insensitive, either separator). }
+function UnderRoot(const APath, ARoot: string): Boolean;
+var
+  n: Integer;
+begin
+  n := Length(ARoot);
+  if (n = 0) or (Length(APath) < n) then Exit(False);
+  if not SameText(Copy(APath, 1, n), ARoot) then Exit(False);
+  Result := (Length(APath) = n) or (APath[n + 1] = '\') or (APath[n + 1] = '/');
+end;
+
+function QueryStateCached(const APath: string): TFileState;
+var
+  root: string;
+  i: Integer;
+  e: TCachedState;
+begin
+  EnterCriticalSection(gCacheLock);
+  try
+    root := CachedRoot;
+    if (root <> '') and not UnderRoot(APath, root) then Exit(fsNone);
+    i := gCache.IndexOf(APath);
+    if i >= 0 then
+    begin
+      e := TCachedState(gCache.Objects[i]);
+      if GetTickCount64 - e.Tick < STATE_TTL_MS then Exit(e.State);
+    end;
+  finally
+    LeaveCriticalSection(gCacheLock);
+  end;
+
+  Result := OverlayQuery(APath, '', 400);     // outside the lock
+
+  EnterCriticalSection(gCacheLock);
+  try
+    if gCache.Count >= CACHE_MAX then gCache.Clear;
+    i := gCache.IndexOf(APath);
+    if i >= 0 then
+      e := TCachedState(gCache.Objects[i])
+    else
+    begin
+      e := TCachedState.Create;
+      gCache.AddObject(APath, e);
+    end;
+    e.State := Result;
+    e.Tick := GetTickCount64;
+  finally
+    LeaveCriticalSection(gCacheLock);
+  end;
+end;
+
 function TOverlayHandler.IsMemberOf(pwszPath: PWideChar;
   dwAttrib: DWORD): HRESULT; stdcall;
 var
@@ -245,7 +352,7 @@ begin
     if pwszPath = nil then Exit;
     // ASCII-correct; non-ASCII paths use the ANSI codepage (rare, best effort)
     path := string(WideString(pwszPath));
-    if OverlayQuery(path, '', 400) = FState then Result := S_OK;
+    if QueryStateCached(path) = FState then Result := S_OK;
   except
     Result := S_FALSE;   // never let an exception escape into Explorer
   end;
@@ -427,5 +534,17 @@ begin
   DeleteLegacyOverlayNames;
   Result := S_OK;
 end;
+
+initialization
+  InitCriticalSection(gCacheLock);
+  gCache := TStringList.Create;
+  gCache.OwnsObjects := True;
+  gCache.CaseSensitive := False;
+  gCache.Sorted := True;
+  gCache.Duplicates := dupIgnore;
+
+finalization
+  FreeAndNil(gCache);
+  DoneCriticalSection(gCacheLock);
 
 end.

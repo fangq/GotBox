@@ -49,7 +49,7 @@ type
   private
     FCache: TStatusCache;
     FEndpoint: string;
-    FListener: TThread;
+    FListeners: array of TThread;
   public
     constructor Create(ACache: TStatusCache; const AEndpoint: string = '');
     destructor Destroy; override;
@@ -76,6 +76,11 @@ uses
 
 const
   REQ_MAX = 8192;     // guard against a runaway/abusive request
+  { Explorer queries from several threads at once. On Windows each listener
+    thread keeps its own pipe instance waiting, so concurrent clients are
+    served in parallel instead of queueing on (and retrying around) a single
+    instance. The Unix socket accepts a backlog, so one listener does. }
+  LISTENER_COUNT = {$IFDEF WINDOWS}4{$ELSE}1{$ENDIF};
 
 { ---- shared request/response helpers ---- }
 
@@ -113,10 +118,9 @@ const
   PIPE_TYPE_BYTE           = $00000000;
   PIPE_READMODE_BYTE       = $00000000;
   PIPE_WAIT                = $00000000;
-  PIPE_NOWAIT              = $00000001;
   PIPE_UNLIMITED_INSTANCES = 255;
   ERROR_PIPE_CONNECTED     = 535;
-  ERROR_NO_DATA            = 232;
+  ERROR_IO_PENDING         = 997;
 
 function DefaultOverlayEndpoint: string;
 var
@@ -151,41 +155,26 @@ begin
   inherited Create(False);   // start running
 end;
 
-{ Read the request (a path up to LF) with a short deadline, then reply one
-  byte. Uses non-blocking mode so a silent client can never stall the single
-  listener thread. }
+{ Read the request (a path up to LF), then reply one byte. Blocking reads: the
+  client writes its whole request right after connecting, so the read returns
+  at once -- the old non-blocking poll paid a Sleep(5) (~15 ms on Windows) per
+  query. A client that connects and never writes can hold this one listener,
+  but the others keep serving, and the read ends when that client goes away. }
 procedure TOverlayListener.Serve(hPipe: THandle);
 var
-  mode, nRead, nWritten: DWORD;
+  nRead, nWritten: DWORD;
   buf: array[0..511] of AnsiChar;
   req, tmp: string;
-  deadline: QWord;
   b: Byte;
-  ok: BOOL;
 begin
-  mode := PIPE_READMODE_BYTE or PIPE_NOWAIT;
-  SetNamedPipeHandleState(hPipe, @mode, nil, nil);
   req := '';
-  deadline := GetTickCount64 + 1000;
-  while GetTickCount64 < deadline do
-  begin
+  repeat
     nRead := 0;
-    ok := ReadFile(hPipe, buf, SizeOf(buf), nRead, nil);
-    if ok and (nRead > 0) then
-    begin
-      SetString(tmp, PAnsiChar(@buf[0]), nRead);
-      req := req + tmp;
-      if Pos(#10, req) > 0 then Break;
-      if Length(req) > REQ_MAX then Break;
-    end
-    else if not ok then
-    begin
-      if GetLastError = ERROR_NO_DATA then Sleep(5)
-      else Break;                      // pipe broken / closed
-    end
-    else
-      Sleep(5);                        // connected but nothing yet
-  end;
+    if not ReadFile(hPipe, buf, SizeOf(buf), nRead, nil) then Break;   // gone
+    if nRead = 0 then Break;
+    SetString(tmp, PAnsiChar(@buf[0]), nRead);
+    req := req + tmp;
+  until (Pos(#10, req) > 0) or (Length(req) > REQ_MAX);
   b := ReplyByteFor(FCache, req);
   WriteFile(hPipe, b, 1, nWritten, nil);
   FlushFileBuffers(hPipe);
@@ -252,15 +241,32 @@ begin
   end;
 end;
 
+{ Wait up to AMs for an overlapped I/O on AH to finish; on timeout cancel it
+  (and wait for the cancellation, so AOv/the buffer are not used afterwards).
+  True if it completed and transferred ADone bytes. }
+function FinishOverlapped(AH: THandle; var AOv: TOverlapped; AStarted: BOOL;
+  AMs: DWORD; out ADone: DWORD): Boolean;
+begin
+  ADone := 0;
+  if (not AStarted) and (GetLastError <> ERROR_IO_PENDING) then Exit(False);
+  if WaitForSingleObject(AOv.hEvent, AMs) <> WAIT_OBJECT_0 then
+  begin
+    CancelIo(AH);
+    GetOverlappedResult(AH, AOv, ADone, True);
+    Exit(False);
+  end;
+  Result := GetOverlappedResult(AH, AOv, ADone, False);
+end;
+
 function OverlayQuery(const APath: string; const AEndpoint: string;
   ATimeoutMs: Integer): TFileState;
 var
   ep, req: string;
-  h: THandle;
-  mode, nWritten, nRead: DWORD;
+  h, ev: THandle;
+  nDone: DWORD;
   b: Byte;
-  overall, rdDeadline: QWord;
-  ok: BOOL;
+  overall, now: QWord;
+  ov: TOverlapped;
   gotByte: Boolean;
 begin
   Result := fsNone;
@@ -275,42 +281,55 @@ begin
     // just-closed one) and fail to connect. Retrying rides over that gap. A real
     // reply -- INCLUDING byte 0 (none) -- returns immediately; only a transport
     // failure (no byte) is retried, so legitimate "none" answers stay fast.
-    repeat
-      gotByte := False;
-      if WaitNamedPipe(PChar(ep), 50) then
-      begin
-        h := CreateFile(PChar(ep), GENERIC_READ or GENERIC_WRITE, 0, nil,
-          OPEN_EXISTING, 0, 0);
-        if h <> INVALID_HANDLE_VALUE then
-          try
-            mode := PIPE_READMODE_BYTE or PIPE_NOWAIT;
-            SetNamedPipeHandleState(h, @mode, nil, nil);
-            req := APath + #10;
-            nWritten := 0;
-            if WriteFile(h, PChar(req)^, Length(req), nWritten, nil) then
-            begin
-              rdDeadline := GetTickCount64 + 500;
-              while (GetTickCount64 < rdDeadline) and (GetTickCount64 < overall) do
+    // Overlapped I/O with real waits instead of the old Sleep(5) polling, which
+    // cost ~15 ms per wait on Windows' default timer -- several per query, three
+    // queries per file Explorer paints.
+    ev := CreateEvent(nil, True, False, nil);
+    if ev = 0 then Exit;
+    try
+      repeat
+        gotByte := False;
+        if WaitNamedPipe(PChar(ep), 50) then
+        begin
+          h := CreateFile(PChar(ep), GENERIC_READ or GENERIC_WRITE, 0, nil,
+            OPEN_EXISTING, FILE_FLAG_OVERLAPPED, 0);
+          if h <> INVALID_HANDLE_VALUE then
+            try
+              req := APath + #10;
+              now := GetTickCount64;
+              if now >= overall then Break;
+              FillChar(ov, SizeOf(ov), 0);
+              ov.hEvent := ev;
+              ResetEvent(ev);
+              if FinishOverlapped(h, ov, WriteFile(h, PChar(req)^, Length(req),
+                nDone, @ov), DWORD(overall - now), nDone) and
+                (nDone = DWORD(Length(req))) then
               begin
-                nRead := 0;
-                ok := ReadFile(h, b, 1, nRead, nil);
-                if ok and (nRead = 1) then
+                now := GetTickCount64;
+                if now < overall then
                 begin
-                  Result := ByteToState(b);
-                  gotByte := True;
-                  Break;
+                  FillChar(ov, SizeOf(ov), 0);
+                  ov.hEvent := ev;
+                  ResetEvent(ev);
+                  if FinishOverlapped(h, ov, ReadFile(h, b, 1, nDone, @ov),
+                    DWORD(overall - now), nDone) and (nDone = 1) then
+                  begin
+                    Result := ByteToState(b);
+                    gotByte := True;
+                  end;
                 end;
-                if (not ok) and (GetLastError <> ERROR_NO_DATA) then Break;
-                Sleep(5);
               end;
+            finally
+              CloseHandle(h);
             end;
-          finally
-            CloseHandle(h);
-          end;
-      end;
-      if gotByte then Exit;
-      Sleep(5);
-    until GetTickCount64 >= overall;
+        end;
+        if gotByte then Exit;
+        // no instance free / transport hiccup: retry while the budget lasts
+        Sleep(1);
+      until GetTickCount64 >= overall;
+    finally
+      CloseHandle(ev);
+    end;
   except
     Result := fsNone;   // fail-safe: never propagate into the file manager
   end;
@@ -521,20 +540,35 @@ begin
 end;
 
 procedure TOverlayServer.Start;
+var
+  i: Integer;
 begin
-  if Assigned(FListener) then Exit;
+  if Length(FListeners) > 0 then Exit;
   if FEndpoint = '' then Exit;            // unsupported platform: no-op
-  FListener := TOverlayListener.Create(FCache, FEndpoint);
+  SetLength(FListeners, LISTENER_COUNT);
+  for i := 0 to High(FListeners) do
+    FListeners[i] := TOverlayListener.Create(FCache, FEndpoint);
   if Assigned(Log) then
     Log.Info('overlay', 'status server on ' + FEndpoint);
 end;
 
 procedure TOverlayServer.Stop;
+var
+  i: Integer;
 begin
-  if not Assigned(FListener) then Exit;
-  TOverlayListener(FListener).Shutdown;
-  FListener.WaitFor;
-  FreeAndNil(FListener);
+  if Length(FListeners) = 0 then Exit;
+  // terminate ALL first: a wake-up connection made for one listener may be
+  // accepted by another, which must then exit too rather than serve it
+  for i := 0 to High(FListeners) do
+    FListeners[i].Terminate;
+  for i := 0 to High(FListeners) do
+    TOverlayListener(FListeners[i]).Shutdown;
+  for i := 0 to High(FListeners) do
+  begin
+    FListeners[i].WaitFor;
+    FListeners[i].Free;
+  end;
+  SetLength(FListeners, 0);
 end;
 
 end.
