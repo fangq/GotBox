@@ -76,12 +76,17 @@ const
   CLSID_Conflict: TGUID = '{224887E8-2FF5-4CE4-97FD-78E97B754800}';
 
 type
+  { The vtable ORDER must match shobjidl.h exactly -- Explorer calls methods by
+    slot, not by name: IsMemberOf, GetOverlayInfo, GetPriority. (Declaring
+    GetOverlayInfo first made Explorer's IsMemberOf(path, attrib) land in
+    GetOverlayInfo, which wrote through a garbage pIndex and crashed Explorer
+    on every folder it painted.) }
   IShellIconOverlayIdentifier = interface(IUnknown)
     ['{0C6C4200-C589-11D0-999A-00C04FD655E1}']
+    function IsMemberOf(pwszPath: PWideChar; dwAttrib: DWORD): HRESULT; stdcall;
     function GetOverlayInfo(pwszIconFile: PWideChar; cchMax: Integer;
       out pIndex: Integer; out pdwFlags: DWORD): HRESULT; stdcall;
     function GetPriority(out pIPriority: Integer): HRESULT; stdcall;
-    function IsMemberOf(pwszPath: PWideChar; dwAttrib: DWORD): HRESULT; stdcall;
   end;
 
   { A private clone of IClassFactory (same GUID + vtable layout); named to avoid
